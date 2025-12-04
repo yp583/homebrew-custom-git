@@ -124,7 +124,6 @@ target_link_libraries(custom_git_shared
 add_executable(git_gcommit.o
     src/main.cpp
     src/hierarchal.cpp
-    src/hdbscan.cpp
     src/kmeans.cpp
 )
 

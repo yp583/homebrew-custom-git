@@ -1,7 +1,7 @@
 #include "ast.hpp"
 #include "async_openai_api.hpp"
 #include "utils.hpp"
-#include "hdbscan.hpp"
+#include "hierarchal.hpp"
 #include "diffreader.hpp"
 #include "umap.hpp"
 #include <vector>
@@ -145,12 +145,11 @@ int main(int argc, char *argv[]) {
   }
   if (verbose >= 1) cerr << " done" << endl;
 
-  int min_cluster_size = max(2, static_cast<int>(dist_thresh * 5));
-  HDBSCANClustering hc(min_cluster_size, 2);
+  HierachicalClustering hc;
 
-  if (verbose >= 1) cerr << "Starting HDBSCAN clustering (min_cluster_size=" << min_cluster_size << ")..." << endl;
+  if (verbose >= 1) cerr << "Starting hierarchical clustering (threshold=" << dist_thresh << ")..." << endl;
 
-  hc.fit(embeddings);
+  hc.cluster(embeddings, dist_thresh);
   vector<vector<int>> clusters = hc.get_clusters();
   if (verbose >= 1) cerr << "Clustering complete. Found " << clusters.size() << " clusters" << endl;
 
