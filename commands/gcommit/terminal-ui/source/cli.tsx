@@ -11,6 +11,7 @@ const cli = meow(`
   Options
     -d, --threshold  Clustering distance threshold (default: 0.5)
     -v, --verbose    Show verbose output from C++ binary
+    --dev            Step through phases with confirmation prompts
     -h, --help       Show this help message
 
   Examples
@@ -28,6 +29,10 @@ const cli = meow(`
     verbose: {
       type: 'boolean',
       shortFlag: 'v',
+      default: false,
+    },
+    dev: {
+      type: 'boolean',
       default: false,
     },
     help: {
@@ -64,6 +69,7 @@ async function main() {
     <App
       threshold={cli.flags.threshold}
       verbose={cli.flags.verbose}
+      dev={cli.flags.dev}
     />
   );
 

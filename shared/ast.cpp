@@ -146,8 +146,8 @@ DiffChunk fillGapLines(const DiffChunk &chunk, const vector<DiffLine> &allLines)
   return result;
 }
 
-vector<DiffChunk> chunkDiff(const ts::Node &node, const DiffChunk &diffChunk,
-                            size_t maxChars) {
+vector<DiffChunk> chunkDiffInternal(const ts::Node &node, const DiffChunk &diffChunk,
+                                     set<int> &processedLineNums, size_t maxChars) {
   vector<DiffChunk> newChunks;
   DiffChunk currentChunk;
   currentChunk.filepath = diffChunk.filepath;
@@ -155,8 +155,6 @@ vector<DiffChunk> chunkDiff(const ts::Node &node, const DiffChunk &diffChunk,
   currentChunk.start = diffChunk.start;
   size_t currentChunkSize = 0;
   bool currentChunkStartSet = false;
-
-  set<int> processedLineNums;
 
   for (size_t i = 0; i < node.getNumChildren(); i++) {
     ts::Node child = node.getChild(i);
@@ -175,7 +173,7 @@ vector<DiffChunk> chunkDiff(const ts::Node &node, const DiffChunk &diffChunk,
         currentChunkSize = 0;
         currentChunkStartSet = false;
       }
-      auto childChunks = chunkDiff(child, diffChunk, maxChars);
+      auto childChunks = chunkDiffInternal(child, diffChunk, processedLineNums, maxChars);
       newChunks.insert(newChunks.end(), childChunks.begin(), childChunks.end());
     } else if (currentChunkSize + childSize > maxChars) {
       newChunks.push_back(fillGapLines(currentChunk, diffChunk.lines));
@@ -213,6 +211,12 @@ vector<DiffChunk> chunkDiff(const ts::Node &node, const DiffChunk &diffChunk,
   }
 
   return newChunks;
+}
+
+vector<DiffChunk> chunkDiff(const ts::Node &node, const DiffChunk &diffChunk,
+                            size_t maxChars) {
+  set<int> processedLineNums;
+  return chunkDiffInternal(node, diffChunk, processedLineNums, maxChars);
 }
 
 ts::Tree codeToTree(const string &code, const string &language) {

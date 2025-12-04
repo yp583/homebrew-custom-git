@@ -1,17 +1,14 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import simpleGit, { SimpleGit } from 'simple-git';
 
 interface GitState {
   git: SimpleGit;
   originalBranch: string;
   stagingBranch: string | null;
-  stashCreated: boolean;
   stagedDiff: string;
 }
 
 interface GitContextValue extends GitState {
-  stashChanges: () => Promise<boolean>;
-  popStash: () => Promise<void>;
   createStagingBranch: () => Promise<string>;
   deleteStagingBranch: () => Promise<void>;
   mergeStagingBranch: () => Promise<void>;
@@ -25,76 +22,54 @@ const GitContext = createContext<GitContextValue | null>(null);
 
 interface GitProviderProps {
   children: ReactNode;
+  dev?: boolean;
 }
 
-export function GitProvider({ children }: GitProviderProps) {
+export function GitProvider({ children, dev = false }: GitProviderProps) {
   const [state, setState] = useState<GitState>({
+    // @ts-ignore
     git: simpleGit(),
     originalBranch: '',
     stagingBranch: null,
-    stashCreated: false,
     stagedDiff: '',
   });
 
-  // Get current branch on mount
   useEffect(() => {
     state.git.branch().then(b => {
       setState(s => ({ ...s, originalBranch: b.current }));
     });
   }, []);
 
-  const stashChanges = useCallback(async (): Promise<boolean> => {
-    // Capture staged diff BEFORE stashing (stash clears it)
-    const diff = await state.git.diff(['--cached']);
-    setState(s => ({ ...s, stagedDiff: diff }));
-
+  const createStagingBranch = useCallback(async (): Promise<string> => {
     const status = await state.git.status();
-
-    // Check if there are any changes to stash (modified, not staged)
     const hasChanges = status.modified.length > 0 ||
                        status.not_added.length > 0 ||
-                       status.deleted.length > 0;
+                       status.deleted.length > 0 ||
+                       status.staged.length > 0 ||
+                       status.renamed.length > 0 ||
+                       status.created.length > 0;
 
     if (hasChanges) {
-      await state.git.stash(['push', '-u', '-m', 'gcommit-auto-stash']);
-      setState(s => ({ ...s, stashCreated: true }));
-      return true;
-    }
-    return false;
-  }, [state.git]);
-
-  const popStash = useCallback(async () => {
-    if (!state.stashCreated) return;
-
-    try {
-      await state.git.stash(['pop', '--index']);
-    } catch (err) {
-      // --index can fail with renames; fallback to pop without --index
-      try {
-        await state.git.stash(['pop']);
-      } catch (fallbackErr) {
-        console.error('Failed to pop stash:', fallbackErr);
-      }
+      await state.git.stash(['push', '-u', '-m', 'gcommit-temp']);
     }
 
-    setState(s => ({ ...s, stashCreated: false }));
-  }, [state.git, state.stashCreated]);
-
-  const createStagingBranch = useCallback(async (): Promise<string> => {
     const branchName = `gcommit-staging-${Date.now()}`;
     await state.git.checkoutLocalBranch(branchName);
-    // Reset staged changes so files are at their original locations
-    // This allows patches (including renames) to be applied cleanly
-    await state.git.reset(['HEAD']);
-    setState(s => ({ ...s, stagingBranch: branchName }));
+
+    if (hasChanges) {
+      await state.git.stash(['apply', '--index']);
+    }
+
+    const diff = await state.git.diff(['--cached']);
+    setState(s => ({ ...s, stagedDiff: diff, stagingBranch: branchName }));
+
+    await state.git.reset(['--hard']);
     return branchName;
   }, [state.git]);
 
   const deleteStagingBranch = useCallback(async () => {
     if (state.stagingBranch) {
-      // First checkout back to original branch
       await state.git.checkout(state.originalBranch);
-      // Then delete the staging branch
       await state.git.deleteLocalBranch(state.stagingBranch, true);
       setState(s => ({ ...s, stagingBranch: null }));
     }
@@ -102,11 +77,8 @@ export function GitProvider({ children }: GitProviderProps) {
 
   const mergeStagingBranch = useCallback(async () => {
     if (state.stagingBranch) {
-      // Checkout original branch
       await state.git.checkout(state.originalBranch);
-      // Merge staging branch
       await state.git.merge([state.stagingBranch]);
-      // Delete staging branch
       await state.git.deleteLocalBranch(state.stagingBranch, true);
       setState(s => ({ ...s, stagingBranch: null }));
     }
@@ -116,9 +88,12 @@ export function GitProvider({ children }: GitProviderProps) {
     try {
       await state.git.raw(['apply', '--unidiff-zero', patchPath]);
     } catch (err: any) {
+      if (dev) {
+        console.error(`Failed to apply patch ${patchPath}:`, err);
+      }
       throw new Error(`Failed to apply patch ${patchPath}: ${err.message}`);
     }
-  }, [state.git]);
+  }, [state.git, dev]);
 
   const stageAll = useCallback(async () => {
     await state.git.add('-A');
@@ -129,15 +104,14 @@ export function GitProvider({ children }: GitProviderProps) {
   }, [state.git]);
 
   const cleanup = useCallback(async () => {
-    // Delete staging branch if it exists
     if (state.stagingBranch) {
-      try {
-        await state.git.checkout(state.originalBranch);
-        await state.git.deleteLocalBranch(state.stagingBranch, true);
-      } catch (err) {
-        // Branch may not exist
-      }
+      await state.git.add('-A');
+      await state.git.commit("commit to cleanup");
+      await state.git.checkout(state.originalBranch);
+      await state.git.deleteLocalBranch(state.stagingBranch, true);
+      await state.git.stash(['apply', "--index"]);
     }
+<<<<<<< HEAD
     // Pop stash if we created one
     if (state.stashCreated) {
       // Clean untracked files that may have been created by failed patches
@@ -164,13 +138,15 @@ export function GitProvider({ children }: GitProviderProps) {
           // Stash may not exist
         }
       }
+=======
+    else {
+      console.error("no staging branch name found")
+>>>>>>> dev
     }
-  }, [state.git, state.stagingBranch, state.originalBranch, state.stashCreated]);
+  }, [state.git, state.stagingBranch, state.originalBranch]);
 
-  const value: GitContextValue = {
+  const value: GitContextValue = useMemo(() => ({
     ...state,
-    stashChanges,
-    popStash,
     createStagingBranch,
     deleteStagingBranch,
     mergeStagingBranch,
@@ -178,7 +154,7 @@ export function GitProvider({ children }: GitProviderProps) {
     stageAll,
     commit,
     cleanup,
-  };
+  }), [state, createStagingBranch, deleteStagingBranch, mergeStagingBranch, applyPatch, stageAll, commit, cleanup]);
 
   return (
     <GitContext.Provider value={value}>

@@ -14,13 +14,15 @@ import { parseFullContextDiff } from './utils/diffUtils.js';
 type Props = {
   threshold: number;
   verbose: boolean;
+  dev: boolean;
 };
 
-function AppContent({ threshold, verbose }: Props) {
+function AppContent({ threshold, verbose, dev }: Props) {
   const { exit } = useApp();
   const git = useGit();
 
-  const [phase, setPhase] = useState<Phase>('stashing');
+  const [phase, setPhase] = useState<Phase>('init');
+  const [pendingPhase, setPendingPhase] = useState<Phase | null>(null);
   const [processingResult, setProcessingResult] = useState<ProcessingResult | null>(null);
   const [commitMessages, setCommitMessages] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -40,22 +42,33 @@ function AppContent({ threshold, verbose }: Props) {
     setSelectedFilePath(filepath);
   }, []);
 
+  // Phase transition helper (handles dev mode intercepts)
+  const goToPhase = useCallback((nextPhase: Phase) => {
+    if (dev && nextPhase !== 'done' && nextPhase !== 'error' && nextPhase !== 'cancelled') {
+      setPendingPhase(nextPhase);
+      setPhase('dev-confirm');
+    } else {
+      setPhase(nextPhase);
+    }
+  }, [dev]);
+
+  // Shared cleanup function
+  const performCleanup = useCallback(async (deletePatches = true) => {
+    try {
+      await git.cleanup();
+      if (deletePatches) {
+        const fs = await import('fs/promises');
+        await fs.rm('/tmp/patches', { recursive: true, force: true });
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
+  }, [git]);
+
   // Global cleanup on process exit/interrupt
   useEffect(() => {
-    const cleanup = async () => {
-      try {
-        await git.cleanup();
-        if (phase !== 'error') {
-          const fs = await import('fs/promises');
-          await fs.rm('/tmp/patches', { recursive: true, force: true });
-        }
-      } catch {
-        // Ignore cleanup errors
-      }
-    };
-
-    const handleExit = () => { cleanup(); };
-    const handleSignal = () => { cleanup().then(() => process.exit(1)); };
+    const handleExit = () => { performCleanup(phase !== 'error'); };
+    const handleSignal = () => { performCleanup(phase !== 'error').then(() => process.exit(1)); };
 
     process.on('exit', handleExit);
     process.on('SIGINT', handleSignal);
@@ -66,277 +79,225 @@ function AppContent({ threshold, verbose }: Props) {
       process.off('SIGINT', handleSignal);
       process.off('SIGTERM', handleSignal);
     };
-  }, [git]);
+  }, [performCleanup, phase]);
 
-  // Phase: Stashing
-  useEffect(() => {
-    if (phase !== 'stashing') return;
+  // Phase functions
+  const runInit = useCallback(async () => {
+    try {
+      setStatusMessage('Initializing...');
+      const fs = await import('fs/promises');
+      await fs.rm('/tmp/patches', { recursive: true, force: true });
 
-    const run = async () => {
-      try {
-        // Clean up any existing patches from previous runs
-        setStatusMessage('Cleaning up previous patches...');
-        const fs = await import('fs/promises');
-        await fs.rm('/tmp/patches', { recursive: true, force: true });
-        
-        setStatusMessage('Stashing working tree changes...');
-        await git.stashChanges();
-        setPhase('processing');
-      } catch (err: any) {
-        setError(err.message);
-        setPhase('error');
+      setStatusMessage('Creating staging branch...');
+      await git.createStagingBranch();
+
+      goToPhase('processing');
+    } catch (err: any) {
+      setError(err.message);
+      setPhase('error');
+      await performCleanup(false);
+    }
+  }, [git, goToPhase, performCleanup]);
+
+  const runProcessing = useCallback(async () => {
+    try {
+      setStatusMessage('Analyzing changes with AI...');
+
+      const { execa } = await import('execa');
+      const diff = git.stagedDiff;
+
+      const scriptDir = dirname(fileURLToPath(import.meta.url));
+      const binaryPath = join(scriptDir, 'git_gcommit.o');
+      const args = ['-d', String(threshold), '-i'];
+      if (verbose) args.push('-v');
+
+      const result = await execa(binaryPath, args, {
+        input: diff,
+        encoding: 'utf8',
+      });
+
+      if (result.stderr) {
+        setStderr(result.stderr);
       }
-    };
-    run();
-  }, [phase]);
 
-  // Phase: Processing (spawn C++ binary)
-  useEffect(() => {
-    if (phase !== 'processing') return;
+      const data: ProcessingResult = JSON.parse(result.stdout);
+      setProcessingResult(data);
 
-    const run = async () => {
-      try {
-        setStatusMessage('Analyzing changes with AI...');
+      goToPhase('applying');
+    } catch (err: any) {
+      setError(err.message);
+      setPhase('error');
+      await performCleanup(false);
+    }
+  }, [git.stagedDiff, threshold, verbose, goToPhase, performCleanup]);
 
-        // Clear any old patches from previous runs
-        const fs = await import('fs/promises');
-        await fs.rm('/tmp/patches', { recursive: true, force: true });
+  const runApplying = useCallback(async () => {
+    try {
+      const data = processingResult;
+      if (!data) return;
 
-        // Dynamic import to avoid loading execa at top level
-        const { execa } = await import('execa');
+      const messages: string[] = [];
+      const shas: string[] = [];
 
-        // Use the diff captured before stashing
-        const diff = git.stagedDiff;
+      for (let i = 0; i < data.commits.length; i++) {
+        const commit = data.commits[i]!;
+        setStatusMessage(`Applying cluster ${i + 1}/${data.commits.length}...`);
 
-        // Spawn C++ binary (find it relative to this script's location)
-        const scriptDir = dirname(fileURLToPath(import.meta.url));
-        const binaryPath = join(scriptDir, 'git_gcommit.o');
-        const args = ['-d', String(threshold), '-i'];
-        if (verbose) args.push('-v');
-
-        const result = await execa(binaryPath, args, {
-          input: diff,
-          encoding: 'utf8',
-        });
-
-        // Store stderr for verbose display
-        if (result.stderr) {
-          setStderr(result.stderr);
+        for (const patchFile of commit.patch_files) {
+          await git.applyPatch(patchFile);
         }
 
-        // Parse JSON from stdout
-        const data: ProcessingResult = JSON.parse(result.stdout);
-        setProcessingResult(data);
-        setPhase('applying');
-      } catch (err: any) {
-        setError(err.message);
-        setPhase('error');
+        await git.stageAll();
+        await git.commit(commit.message);
+        messages.push(commit.message);
+
+        const sha = await git.git.revparse(['HEAD']);
+        shas.push(sha);
       }
-    };
-    run();
-  }, [phase, threshold, verbose]);
 
-  // Phase: Applying (create staging branch, apply patches, commit)
-  useEffect(() => {
-    if (phase !== 'applying' || !processingResult) return;
+      setCommitMessages(messages);
+      setCommitShas(shas);
 
-    const run = async () => {
-      try {
-        setStatusMessage('Creating staging branch...');
-        await git.createStagingBranch();
-
-        const messages: string[] = [];
-        const shas: string[] = [];
-
-        for (let i = 0; i < processingResult.commits.length; i++) {
-          const commit = processingResult.commits[i]!;
-          setStatusMessage(`Applying cluster ${i + 1}/${processingResult.commits.length}...`);
-
-          // Apply each patch file
-          for (const patchFile of commit.patch_files) {
-            await git.applyPatch(patchFile);
-          }
-
-          // Stage and commit
-          await git.stageAll();
-          await git.commit(commit.message);
-          messages.push(commit.message);
-
-          // Capture the commit SHA
-          const sha = await git.git.revparse(['HEAD']);
-          shas.push(sha);
-        }
-
-        setCommitMessages(messages);
-        setCommitShas(shas);
-        setPhase('visualization');
-      } catch (err: any) {
-        setError(err.message);
-        setPhase('error');
-      }
-    };
-    run();
-  }, [phase, processingResult]);
-
-  // Load per-file diffs when entering visualization phase
-  useEffect(() => {
-    if (phase !== 'visualization' || commitShas.length === 0) return;
-
-    const loadDiffs = async () => {
+      // Load file diffs for visualization
       const allDiffs = new Map<string, Map<string, DiffLine[]>>();
-
-      for (const sha of commitShas) {
+      for (const sha of shas) {
         const perFileDiffs = new Map<string, DiffLine[]>();
-
-        // Get list of changed files for this commit
         const filesOutput = await git.git.diff([`${sha}^`, sha, '--name-only']);
         const fileList = filesOutput.trim().split('\n').filter(f => f);
 
-        // Get full file diff with full context (entire file shown)
         for (const file of fileList) {
-          // Use -U999999 to get full file as context in the diff
-          const diff = await git.git.diff(['-U999999', `${sha}^`, sha, '--', file]);
-
-          // Parse the full-context diff directly
-          const diffLines = parseFullContextDiff(diff);
+          const fileDiff = await git.git.diff(['-U999999', `${sha}^`, sha, '--', file]);
+          const diffLines = parseFullContextDiff(fileDiff);
           perFileDiffs.set(file, diffLines);
         }
-
         allDiffs.set(sha, perFileDiffs);
       }
-
       setFileDiffs(allDiffs);
-    };
 
-    loadDiffs();
-  }, [phase, commitShas]);
+      goToPhase('visualization');
+    } catch (err: any) {
+      setError(err.message);
+      setPhase('error');
+      await performCleanup(false);
+    }
+  }, [git, processingResult, goToPhase, performCleanup]);
 
-  // Phase: Merging
-  useEffect(() => {
-    if (phase !== 'merging') return;
+  const runMerging = useCallback(async () => {
+    try {
+      setStatusMessage('Merging to original branch...');
+      await git.mergeStagingBranch();
+      goToPhase('restoring');
+    } catch (err: any) {
+      setError(err.message);
+      setPhase('error');
+      await performCleanup(false);
+    }
+  }, [git, goToPhase, performCleanup]);
 
-    const run = async () => {
-      try {
-        setStatusMessage('Merging to original branch...');
-        await git.mergeStagingBranch();
-        setPhase('restoring');
-      } catch (err: any) {
-        setError(err.message);
-        setPhase('error');
-      }
-    };
-    run();
-  }, [phase]);
-
-  // Phase: Restoring stash
-  useEffect(() => {
-    if (phase !== 'restoring') return;
-
-    const run = async () => {
-      try {
-        setStatusMessage('Restoring working tree...');
-        await git.popStash();
-        setPhase('done');
-      } catch (err: any) {
-        // Non-fatal - stash might not exist, but print the error
-        console.error('Failed to pop stash:', err.message);
-        setPhase('done');
-      }
-    };
-    run();
-  }, [phase]);
-
-  // Phase: Cancelled
-  useEffect(() => {
-    if (phase !== 'cancelled') return;
-
-    const run = async () => {
-      try {
-        setStatusMessage('Cancelling...');
-        await git.deleteStagingBranch();
-        await git.popStash();
-        // Clean up temp files
-        const fs = await import('fs/promises');
-        await fs.rm('/tmp/patches', { recursive: true, force: true });
-      } catch (err: any) {
-        // Print cleanup errors for debugging
-        console.error('Cleanup error during cancellation:', err.message);
-      }
+  const runRestoring = useCallback(async () => {
+    try {
+      setStatusMessage('Cleaning up...');
+      await performCleanup();
+      setPhase('done');
       exit();
-    };
-    run();
-  }, [phase]);
+    } catch (err: any) {
+      setError(err.message);
+      setPhase('error');
+    }
+  }, [performCleanup, exit]);
 
-  // Phase: Error
+  const runCancelled = useCallback(async () => {
+    setStatusMessage('Cancelling...');
+    await performCleanup();
+    exit();
+  }, [performCleanup, exit]);
+
+  // Single useEffect with switch on phase
   useEffect(() => {
-    if (phase !== 'error') return;
-
-    const run = async () => {
-      try {
-        await git.cleanup();
-        // Don't delete patches on error - keep for debugging
-        // const fs = await import('fs/promises');
-        // await fs.rm('/tmp/patches', { recursive: true, force: true });
-      } catch (err) {
-        // Ignore cleanup errors
-      }
-      exit();
-    };
-    run();
+    switch (phase) {
+      case 'init':
+        runInit();
+        break;
+      case 'processing':
+        runProcessing();
+        break;
+      case 'applying':
+        runApplying();
+        break;
+      case 'merging':
+        runMerging();
+        break;
+      case 'restoring':
+        runRestoring();
+        break;
+      case 'cancelled':
+        runCancelled();
+        break;
+      // 'dev-confirm', 'visualization', 'done', 'error': UI-driven, no async work
+    }
   }, [phase]);
 
-  // Phase: Done
-  useEffect(() => {
-    if (phase !== 'done') return;
-
-    // Clean up temp files and exit
-    const run = async () => {
-      try {
-        const fs = await import('fs/promises');
-        await fs.rm('/tmp/patches', { recursive: true, force: true });
-      } catch (err) {
-        // Ignore
-      }
-      exit();
-    };
-    run();
-  }, [phase]);
-
-  // Keyboard input for visualization phase
+  // Keyboard input handler
   useInput((input, key) => {
-    if (phase !== 'visualization') return;
-
-    const numClusters = commitShas.length;
-
-    // View toggle
-    if (input === 'v') {
-      setViewMode(v => (v === 'scatter' ? 'diff' : 'scatter'));
+    // Dev mode confirmation
+    if (phase === 'dev-confirm' && pendingPhase) {
+      if (input === 'y' || key.return) {
+        setPhase(pendingPhase);
+        setPendingPhase(null);
+      } else if (input === 'n') {
+        setPendingPhase(null);
+        setPhase('cancelled');
+      }
+      return;
     }
 
-    // Panel toggle (diff view only)
-    if (viewMode === 'diff' && key.tab) {
-      setFocusPanel(p => (p === 'tree' ? 'diff' : 'tree'));
-    }
+    // Visualization phase controls
+    if (phase === 'visualization') {
+      const numClusters = commitShas.length;
 
-    // Commit navigation with shift key (works from any panel)
-    if (key.shift && (input === 'h' || input === 'H' || key.leftArrow)) {
-      setSelectedCluster(c => Math.max(0, c - 1));
-      setSelectedFilePath('');
-    } else if (key.shift && (input === 'l' || input === 'L' || key.rightArrow)) {
-      setSelectedCluster(c => Math.min(numClusters - 1, c + 1));
-      setSelectedFilePath('');
-    }
+      // View toggle
+      if (input === 'v') {
+        setViewMode(v => (v === 'scatter' ? 'diff' : 'scatter'));
+      }
 
-    // Apply/Cancel (always available)
-    if (input === 'a') {
-      setPhase('merging');
-    } else if (input === 'q' || input === 'c' || key.escape) {
-      setPhase('cancelled');
+      // Panel toggle (diff view only)
+      if (viewMode === 'diff' && key.tab) {
+        setFocusPanel(p => (p === 'tree' ? 'diff' : 'tree'));
+      }
+
+      // Commit navigation with shift key (works from any panel)
+      if (key.shift && (input === 'h' || input === 'H' || key.leftArrow)) {
+        setSelectedCluster(c => Math.max(0, c - 1));
+        setSelectedFilePath('');
+      } else if (key.shift && (input === 'l' || input === 'L' || key.rightArrow)) {
+        setSelectedCluster(c => Math.min(numClusters - 1, c + 1));
+        setSelectedFilePath('');
+      }
+
+      // Apply/Cancel
+      if (input === 'a') {
+        goToPhase('merging');
+      } else if (input === 'q' || input === 'c' || key.escape) {
+        setPhase('cancelled');
+      }
     }
   });
 
   // Render based on phase
-  if (phase === 'stashing' || phase === 'processing' || phase === 'applying') {
+
+  // Dev mode: show confirmation prompt
+  if (phase === 'dev-confirm' && pendingPhase) {
+    return (
+      <Box flexDirection="column">
+        <Text color="yellow">
+          [DEV] Proceed to "{pendingPhase}"?
+        </Text>
+        <Text dimColor>Press y/Enter to continue, n to cancel</Text>
+      </Box>
+    );
+  }
+
+  if (phase === 'init' || phase === 'processing' || phase === 'applying') {
     return (
       <Box flexDirection="column">
         <Spinner label={statusMessage} />
@@ -455,7 +416,7 @@ function AppContent({ threshold, verbose }: Props) {
 
 export default function App(props: Props) {
   return (
-    <GitProvider>
+    <GitProvider dev={props.dev}>
       <AppContent {...props} />
     </GitProvider>
   );

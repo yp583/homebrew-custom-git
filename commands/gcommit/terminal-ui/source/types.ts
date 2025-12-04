@@ -27,7 +27,8 @@ export type ProcessingResult = {
 };
 
 export type Phase =
-  | 'stashing'
+  | 'init'
+  | 'dev-confirm'
   | 'processing'
   | 'applying'
   | 'visualization'
