@@ -111,37 +111,8 @@ export function GitProvider({ children, dev = false }: GitProviderProps) {
       await state.git.deleteLocalBranch(state.stagingBranch, true);
       await state.git.stash(['apply', "--index"]);
     }
-<<<<<<< HEAD
-    // Pop stash if we created one
-    if (state.stashCreated) {
-      // Clean untracked files that may have been created by failed patches
-      // This prevents "would be overwritten" errors when popping stash
-      try {
-        await state.git.raw(['clean', '-fd']);
-      } catch {
-        // Ignore clean errors
-      }
-      try {
-        // Clean untracked files that may have been created by failed patches
-        // This prevents "would be overwritten" errors when popping stash
-        await state.git.clean('f', ['-d']);
-      } catch {
-        // Ignore clean errors
-      }
-      try {
-        await state.git.stash(['pop', '--index']);
-      } catch (err) {
-        // --index can fail with renames; fallback to pop without --index
-        try {
-          await state.git.stash(['pop']);
-        } catch {
-          // Stash may not exist
-        }
-      }
-=======
     else {
       console.error("no staging branch name found")
->>>>>>> dev
     }
   }, [state.git, state.stagingBranch, state.originalBranch]);
 
