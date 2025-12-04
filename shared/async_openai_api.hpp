@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 
 using namespace std;
+static constexpr size_t MAX_EMBEDDING_BYTES = 16000;
 
 class AsyncOpenAIAPI {
   private:

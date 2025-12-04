@@ -1,4 +1,5 @@
 #include "async_openai_api.hpp"
+#include "utils.hpp"
 
 using json = nlohmann::json;
 using namespace std;
@@ -10,6 +11,8 @@ future<HTTPSResponse> AsyncOpenAIAPI::async_embedding(string text) {
         {"Authorization", "Bearer " + this->api_key},
         {"Content-Type", "application/json"}
     };
+
+    text = utf8_substr(text, MAX_EMBEDDING_BYTES);
 
     json request_body = {
         {"model", "text-embedding-3-small"},

@@ -80,3 +80,14 @@ future<string> async_generate_commit_message(AsyncOpenAIAPI& chat_api, const str
         return parse_chat_response(response.body);
     }, std::move(response_future));
 }
+
+string utf8_substr(const string& str, size_t max_bytes) {
+    if (str.size() <= max_bytes) {
+        return str;
+    }
+    size_t pos = max_bytes;
+    while (pos > 0 && (str[pos] & UTF8_CONTINUATION_MASK) == UTF8_CONTINUATION_BYTE) {
+        pos--;
+    }
+    return str.substr(0, pos);
+}

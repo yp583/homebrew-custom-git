@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from 'react';
 import simpleGit, { SimpleGit } from 'simple-git';
 
 interface GitState {
@@ -34,11 +34,20 @@ export function GitProvider({ children, dev = false }: GitProviderProps) {
     stagedDiff: '',
   });
 
+  const stagingBranchRef = useRef<string | null>(null);
+  const originalBranchRef = useRef<string>('');
+
   useEffect(() => {
     state.git.branch().then(b => {
       setState(s => ({ ...s, originalBranch: b.current }));
+      originalBranchRef.current = b.current;
     });
   }, []);
+
+  useEffect(() => {
+    stagingBranchRef.current = state.stagingBranch;
+    originalBranchRef.current = state.originalBranch;
+  }, [state.stagingBranch, state.originalBranch]);
 
   const createStagingBranch = useCallback(async (): Promise<string> => {
     const status = await state.git.status();
@@ -104,17 +113,25 @@ export function GitProvider({ children, dev = false }: GitProviderProps) {
   }, [state.git]);
 
   const cleanup = useCallback(async () => {
-    if (state.stagingBranch) {
+    const stagingBranch = stagingBranchRef.current;
+    const originalBranch = originalBranchRef.current;
+
+    if (stagingBranch) {
       await state.git.add('-A');
-      await state.git.commit("commit to cleanup");
-      await state.git.checkout(state.originalBranch);
-      await state.git.deleteLocalBranch(state.stagingBranch, true);
+      try {
+        await state.git.commit("commit to cleanup");
+      }
+      catch {
+        // no changes needing commit before checking out
+      }
+      await state.git.checkout(originalBranch);
+      await state.git.deleteLocalBranch(stagingBranch, true);
       await state.git.stash(['apply', "--index"]);
     }
     else {
       console.error("no staging branch name found")
     }
-  }, [state.git, state.stagingBranch, state.originalBranch]);
+  }, [state.git]);
 
   const value: GitContextValue = useMemo(() => ({
     ...state,

@@ -68,7 +68,7 @@ function AppContent({ threshold, verbose, dev }: Props) {
   // Global cleanup on process exit/interrupt
   useEffect(() => {
     const handleExit = () => { performCleanup(phase !== 'error'); };
-    const handleSignal = () => { performCleanup(phase !== 'error').then(() => process.exit(1)); };
+    const handleSignal = () => { performCleanup(phase !== 'error').then(() => exit()); };
 
     process.on('exit', handleExit);
     process.on('SIGINT', handleSignal);
@@ -106,6 +106,11 @@ function AppContent({ threshold, verbose, dev }: Props) {
       const { execa } = await import('execa');
       const diff = git.stagedDiff;
 
+      if (dev) {
+        const fs = await import('fs/promises');
+        await fs.writeFile('diff.test', diff, 'utf8');
+      }
+
       const scriptDir = dirname(fileURLToPath(import.meta.url));
       const binaryPath = join(scriptDir, 'git_gcommit.o');
       const args = ['-d', String(threshold), '-i'];
@@ -129,7 +134,7 @@ function AppContent({ threshold, verbose, dev }: Props) {
       setPhase('error');
       await performCleanup(false);
     }
-  }, [git.stagedDiff, threshold, verbose, goToPhase, performCleanup]);
+  }, [git.stagedDiff, threshold, verbose, dev, goToPhase, performCleanup]);
 
   const runApplying = useCallback(async () => {
     try {
@@ -233,7 +238,10 @@ function AppContent({ threshold, verbose, dev }: Props) {
       case 'cancelled':
         runCancelled();
         break;
-      // 'dev-confirm', 'visualization', 'done', 'error': UI-driven, no async work
+      case 'error':
+        exit();
+        break;
+      // 'dev-confirm', 'visualization', 'done': UI-driven, no async work
     }
   }, [phase]);
 

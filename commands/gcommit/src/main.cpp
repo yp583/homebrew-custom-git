@@ -117,7 +117,6 @@ int main(int argc, char *argv[]) {
 
   if (verbose >= 1) cerr << "Getting embeddings for " << all_chunks.size() << " chunks..." << endl;
 
-  const size_t MAX_EMBEDDING_CHARS = 16000;
   for (const auto& chunk : all_chunks) {
     string content = combineContent(chunk);
     // For pure renames/empty chunks, use descriptive text for embedding
@@ -125,9 +124,6 @@ int main(int argc, char *argv[]) {
       content = "renamed file from " + chunk.old_filepath + " to " + chunk.filepath;
     } else if (content.empty()) {
       content = "file: " + chunk.filepath;
-    }
-    if (content.size() > MAX_EMBEDDING_CHARS) {
-      content = content.substr(0, MAX_EMBEDDING_CHARS);
     }
     embedding_futures.push_back(openai_api.async_embedding(content));
   }
@@ -278,7 +274,7 @@ int main(int argc, char *argv[]) {
     json points_json = json::array();
     for (size_t i = 0; i < all_chunks.size(); i++) {
       string preview = combineContent(all_chunks[i]);
-      if (preview.size() > 100) preview = preview.substr(0, 100) + "...";
+      if (preview.size() > 100) preview = utf8_substr(preview, 100) + "...";
 
       double x = (i < umap_points.size()) ? umap_points[i].x : 0.0;
       double y = (i < umap_points.size()) ? umap_points[i].y : 0.0;
