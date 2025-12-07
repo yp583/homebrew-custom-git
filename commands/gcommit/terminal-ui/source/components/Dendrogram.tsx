@@ -52,12 +52,13 @@ type GridCell = {
 
 function renderDendrogramGrid(
 	numLeaves: number,
+	displayRows: number,
 	merges: MergeEvent[],
 	maxDist: number,
 	threshold: number,
 	width: number
 ): GridCell[][] {
-	const height = numLeaves;
+	const height = displayRows;
 	const grid: GridCell[][] = Array.from({length: height}, () =>
 		Array.from({length: width}, () => ({char: ' '}))
 	);
@@ -65,10 +66,9 @@ function renderDendrogramGrid(
 	if (numLeaves === 0 || merges.length === 0) return grid;
 
 	// Track current cluster positions (y position for each original leaf)
+	// Use full numLeaves for union-find, but only display first displayRows
 	const clusterY: number[] = Array.from({length: numLeaves}, (_, i) => i);
-	// Track which leaves are in each cluster
 	const clusterMembers: number[][] = Array.from({length: numLeaves}, (_, i) => [i]);
-	// Union-find parent
 	const parent: number[] = Array.from({length: numLeaves}, (_, i) => i);
 
 	const find = (i: number): number => {
@@ -76,7 +76,7 @@ function renderDendrogramGrid(
 		return parent[i]!;
 	};
 
-	// Draw horizontal lines from each leaf to the threshold or their first merge
+	// Track first merge x for each leaf
 	const leafMergeX: number[] = new Array(numLeaves).fill(width - 1);
 
 	for (const merge of merges) {
@@ -102,13 +102,13 @@ function renderDendrogramGrid(
 		const maxY = Math.max(yA, yB);
 		const newY = (yA + yB) / 2;
 
-		// Draw vertical connector
+		// Draw vertical connector (only if within display range)
 		const isBeforeThreshold = merge.distance <= threshold;
 		const color = isBeforeThreshold ? 'green' : 'gray';
 
-		for (let y = minY; y <= maxY; y++) {
-			if (y >= 0 && y < height && x >= 0 && x < width) {
-				grid[Math.round(y)]![x] = {char: '│', color};
+		for (let y = Math.max(0, Math.floor(minY)); y <= Math.min(height - 1, Math.ceil(maxY)); y++) {
+			if (x >= 0 && x < width) {
+				grid[y]![x] = {char: '│', color};
 			}
 		}
 
@@ -118,13 +118,12 @@ function renderDendrogramGrid(
 		clusterY[rootB] = newY;
 	}
 
-	// Draw horizontal lines from leaves to their merge point
-	for (let leaf = 0; leaf < numLeaves; leaf++) {
-		const y = leaf;
+	// Draw horizontal lines from leaves to their merge point (only for displayed leaves)
+	for (let leaf = 0; leaf < displayRows; leaf++) {
 		const endX = leafMergeX[leaf]!;
 		for (let x = 0; x < endX; x++) {
-			if (grid[y]![x]!.char === ' ') {
-				grid[y]![x] = {char: '─', color: 'cyan'};
+			if (grid[leaf]![x]!.char === ' ') {
+				grid[leaf]![x] = {char: '─', color: 'cyan'};
 			}
 		}
 	}
@@ -167,8 +166,8 @@ export default function Dendrogram({data, threshold, onThresholdChange, onConfir
 	const maxRows = 20;
 	const displayLeaves = Math.min(numLeaves, maxRows);
 
-	// Render tree grid
-	const grid = renderDendrogramGrid(displayLeaves, data.merges, maxDist, threshold, treeWidth);
+	// Render tree grid (pass numLeaves for union-find, displayLeaves for grid height)
+	const grid = renderDendrogramGrid(numLeaves, displayLeaves, data.merges, maxDist, threshold, treeWidth);
 
 	return (
 		<Box flexDirection="column" padding={1}>
