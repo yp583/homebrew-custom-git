@@ -1,7 +1,6 @@
 #include "diffreader.hpp"
 #include <vector>
 #include <fstream>
-#include <set>
 #include <map>
 
 DiffReader::DiffReader(istream& in, bool verbose)
@@ -231,9 +230,14 @@ vector<string> createPatches(vector<DiffChunk> chunks) {
     unordered_map<string, map<int, int>> file_cumulative_deltas;
 
     unordered_map<string, size_t> deleted_file_last_idx;
+    unordered_map<string, size_t> new_file_first_idx;
+    
     for (size_t i = 0; i < chunks.size(); i++) {
         if (chunks[i].is_deleted) {
             deleted_file_last_idx[chunks[i].filepath] = i;
+        }
+        if (chunks[i].is_new && new_file_first_idx.find(chunks[i].filepath) == new_file_first_idx.end()) {
+            new_file_first_idx[chunks[i].filepath] = i;
         }
     }
 
@@ -251,6 +255,12 @@ vector<string> createPatches(vector<DiffChunk> chunks) {
 
         bool is_deleted_file = chunk.is_deleted;
         string filepath = chunk.filepath;
+
+        // Only first chunk of a new file gets is_new for patch generation
+        auto new_it = new_file_first_idx.find(filepath);
+        if (chunk.is_new && (new_it == new_file_first_idx.end() || new_it->second != i)) {
+            chunk.is_new = false;
+        }
 
         chunk.is_deleted = false;
 

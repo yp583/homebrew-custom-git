@@ -59,8 +59,7 @@ vector<DiffChunk> chunkByLines(const DiffChunk &inputChunk, size_t maxChars) {
     currentChunk.filepath = inputChunk.filepath;
     currentChunk.old_filepath = inputChunk.old_filepath;
     currentChunk.start = inputChunk.start + cumulative_offset;
-    // Only first chunk gets is_new (triggers file creation)
-    currentChunk.is_new = is_first && inputChunk.is_new;
+    currentChunk.is_new = inputChunk.is_new;
 
     size_t currentSize = 0;
     size_t currentLineIdx = startLineIdx;
@@ -78,13 +77,11 @@ vector<DiffChunk> chunkByLines(const DiffChunk &inputChunk, size_t maxChars) {
       currentLineIdx++;
     }
 
-    bool is_last = (currentLineIdx >= inputChunk.lines.size());
-    // Only last chunk gets is_deleted (triggers file deletion)
-    currentChunk.is_deleted = is_last && inputChunk.is_deleted;
+    currentChunk.is_deleted = inputChunk.is_deleted;
 
     chunks.push_back(currentChunk);
 
-    if (is_last) {
+    if (currentLineIdx >= inputChunk.lines.size()) {
       break;
     }
 
@@ -170,9 +167,10 @@ vector<DiffChunk> chunkDiffInternal(const ts::Node &node, const DiffChunk &diffC
     newChunks.push_back(currentChunk);
   }
 
-  if (!newChunks.empty()) {
-    newChunks.front().is_new = diffChunk.is_new;
-    newChunks.back().is_deleted = diffChunk.is_deleted;
+  // Mark ALL chunks with is_new/is_deleted so patch ordering works after clustering
+  for (auto &chunk : newChunks) {
+    chunk.is_new = diffChunk.is_new;
+    chunk.is_deleted = diffChunk.is_deleted;
   }
 
   return newChunks;
