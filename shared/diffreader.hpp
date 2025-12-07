@@ -61,4 +61,9 @@ string combineContent(DiffChunk chunk);
 string createPatch(DiffChunk chunk, bool include_file_header = true);
 vector<string> createPatches(vector<DiffChunk> chunks);
 
+// JSON serialization
+#include <nlohmann/json.hpp>
+nlohmann::json chunk_to_json(const DiffChunk& chunk);
+DiffChunk chunk_from_json(const nlohmann::json& j);
+
 #endif // DIFFREADER_HPP
