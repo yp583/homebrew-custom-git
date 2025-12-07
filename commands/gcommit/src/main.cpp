@@ -7,6 +7,7 @@
 #include <vector>
 #include <fstream>
 #include <filesystem>
+#include <sstream>
 
 using namespace std;
 using json = nlohmann::json;
@@ -25,41 +26,7 @@ struct ClusteredCommit {
   }
 };
 
-int main(int argc, char *argv[]) {
-  float dist_thresh = 0.5;
-  int verbose = 0;
-  bool interactive = false;
-
-  for (int i = 1; i < argc; i++) {
-    string arg = argv[i];
-    if (arg == "-vv") {
-      verbose = 2;
-    } else if (arg == "-v") {
-      verbose = 1;
-    } else if (arg == "-i") {
-      interactive = true;
-    } else if (arg == "-d") {
-      if (i + 1 < argc) {
-        try {
-          dist_thresh = stof(argv[++i]);
-        } catch (...) {
-          cerr << "Error: -d requires a numeric threshold value" << endl;
-          return 1;
-        }
-      } else {
-        cerr << "Error: -d requires a threshold value" << endl;
-        return 1;
-      }
-    } else {
-      try {
-        dist_thresh = stof(arg);
-      } catch (...) {
-        cerr << "Usage: " << argv[0] << " [-d threshold] [-i] [-v|-vv]" << endl;
-        return 1;
-      }
-    }
-  }
-
+string get_api_key() {
   const char* api_key_env = getenv("OPENAI_API_KEY");
   string api_key = api_key_env ? api_key_env : "";
 
@@ -73,9 +40,63 @@ int main(int argc, char *argv[]) {
       pclose(pipe);
     }
   }
+  return api_key;
+}
 
+int run_merge_mode(int verbose);
+int run_threshold_mode(float threshold, const string& json_path, int verbose);
+
+int main(int argc, char *argv[]) {
+  float dist_thresh = -1;
+  int verbose = 0;
+  bool merge_mode = false;
+  string json_path;
+
+  for (int i = 1; i < argc; i++) {
+    string arg = argv[i];
+    if (arg == "-vv") {
+      verbose = 2;
+    } else if (arg == "-v") {
+      verbose = 1;
+    } else if (arg == "-m") {
+      merge_mode = true;
+    } else if (arg == "-t") {
+      if (i + 2 < argc) {
+        try {
+          dist_thresh = stof(argv[++i]);
+          json_path = argv[++i];
+        } catch (...) {
+          cerr << "Error: -t requires threshold and json file path" << endl;
+          return 1;
+        }
+      } else {
+        cerr << "Error: -t requires threshold and json file path" << endl;
+        return 1;
+      }
+    } else {
+      cerr << "Usage: " << argv[0] << " -m [-v|-vv]  (merge mode)" << endl;
+      cerr << "       " << argv[0] << " -t <threshold> <json_file> [-v|-vv]  (threshold mode)" << endl;
+      return 1;
+    }
+  }
+
+  if (!merge_mode && dist_thresh < 0) {
+    cerr << "Error: Must specify either -m or -t <threshold> <json_file>" << endl;
+    return 1;
+  }
+
+  if (merge_mode) {
+    return run_merge_mode(verbose);
+  } else {
+    return run_threshold_mode(dist_thresh, json_path, verbose);
+  }
+}
+
+// Phase 1: Read diff, get embeddings, cluster, output dendrogram + chunks
+int run_merge_mode(int verbose) {
+  string api_key = get_api_key();
   if (api_key.empty()) {
-    cerr << "Error: OPENAI_API_KEY not found in environment or git config (custom.openaiApiKey)" << endl;
+    cerr << "Error: OPENAI_API_KEY not found" << endl;
     return 1;
   }
 
@@ -83,10 +104,8 @@ int main(int argc, char *argv[]) {
   dr.ingestDiff();
   if (verbose >= 1) cerr << "Parsed " << dr.getChunks().size() << " chunks from git diff" << endl;
 
-  // AST-chunk the diff
   vector<DiffChunk> all_chunks;
   for (const DiffChunk& chunk : dr.getChunks()) {
-    // Pure renames have no lines - pass through directly
     if (chunk.is_rename) {
       all_chunks.push_back(chunk);
       continue;
@@ -110,24 +129,18 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  // Get embeddings
   AsyncHTTPSConnection conn(verbose);
   AsyncOpenAIAPI openai_api(conn, api_key);
   vector<future<HTTPSResponse>> embedding_futures;
 
   if (verbose >= 1) cerr << "Getting embeddings for " << all_chunks.size() << " chunks..." << endl;
 
-  const size_t MAX_EMBEDDING_CHARS = 16000;
   for (const auto& chunk : all_chunks) {
     string content = combineContent(chunk);
-    // For pure renames/empty chunks, use descriptive text for embedding
     if (chunk.is_rename) {
       content = "renamed file from " + chunk.old_filepath + " to " + chunk.filepath;
     } else if (content.empty()) {
       content = "file: " + chunk.filepath;
-    }
-    if (content.size() > MAX_EMBEDDING_CHARS) {
-      content = content.substr(0, MAX_EMBEDDING_CHARS);
     }
     embedding_futures.push_back(openai_api.async_embedding(content));
   }
@@ -146,103 +159,160 @@ int main(int argc, char *argv[]) {
   if (verbose >= 1) cerr << " done" << endl;
 
   HierachicalClustering hc;
+  if (verbose >= 1) cerr << "Running hierarchical clustering..." << endl;
+  vector<MergeEvent> merges = hc.cluster(embeddings);
+  if (verbose >= 1) cerr << "Clustering complete. " << merges.size() << " merge events" << endl;
 
-  if (verbose >= 1) cerr << "Starting hierarchical clustering (threshold=" << dist_thresh << ")..." << endl;
+  // Build output JSON
+  json output;
 
-  hc.cluster(embeddings, dist_thresh);
-  vector<vector<int>> clusters = hc.get_clusters();
-  if (verbose >= 1) cerr << "Clustering complete. Found " << clusters.size() << " clusters" << endl;
+  // Dendrogram
+  json dendrogram;
+  json labels = json::array();
+  for (const auto& chunk : all_chunks) {
+    labels.push_back(chunk.filepath);
+  }
+  dendrogram["labels"] = labels;
 
-  vector<UmapPoint> umap_points;
-  if (interactive) {
-    if (embeddings.size() >= 3) {
-      if (verbose >= 1) cerr << "Running UMAP dimensionality reduction..." << endl;
-      try {
-        umap_points = compute_umap(embeddings);
-        if (verbose >= 1) cerr << "UMAP complete." << endl;
-      } catch (const exception& e) {
-        if (verbose >= 1) cerr << "UMAP failed: " << e.what() << endl;
-        umap_points = {};
-      }
-    } else {
-      if (verbose >= 1) cerr << "Skipping UMAP (need >= 3 chunks, got " << embeddings.size() << ")" << endl;
-    }
+  json merges_json = json::array();
+  float max_distance = 0;
+  for (const auto& merge : merges) {
+    merges_json.push_back({
+      {"left", merge.cluster_a_id},
+      {"right", merge.cluster_b_id},
+      {"distance", merge.distance}
+    });
+    if (merge.distance > max_distance) max_distance = merge.distance;
+  }
+  dendrogram["merges"] = merges_json;
+  dendrogram["max_distance"] = max_distance;
+  output["dendrogram"] = dendrogram;
+
+  // Chunks
+  json chunks_json = json::array();
+  for (size_t i = 0; i < all_chunks.size(); i++) {
+    json chunk_j = chunk_to_json(all_chunks[i]);
+    chunk_j["index"] = i;
+    chunks_json.push_back(chunk_j);
+  }
+  output["chunks"] = chunks_json;
+
+  cout << output.dump() << endl;
+  return 0;
+}
+
+// Phase 2: Read JSON, apply threshold, create patches, generate commits
+int run_threshold_mode(float threshold, const string& json_path, int verbose) {
+  string api_key = get_api_key();
+  if (api_key.empty()) {
+    cerr << "Error: OPENAI_API_KEY not found" << endl;
+    return 1;
   }
 
-  vector<int> chunk_to_cluster(all_chunks.size(), -1);
-  for (size_t i = 0; i < clusters.size(); i++) {
-    for (int idx : clusters[i]) {
-      chunk_to_cluster[idx] = static_cast<int>(i);
-    }
+  ifstream json_file(json_path);
+  if (!json_file.is_open()) {
+    cerr << "Error: Cannot open " << json_path << endl;
+    return 1;
   }
 
-  vector<DiffChunk> all_cluster_chunks;
-  vector<size_t> cluster_end_idx;
+  json input;
+  try {
+    json_file >> input;
+  } catch (const exception& e) {
+    cerr << "Error parsing JSON: " << e.what() << endl;
+    return 1;
+  }
+
+  // Parse merge events
+  vector<MergeEvent> merges;
+  for (const auto& m : input["dendrogram"]["merges"]) {
+    merges.push_back({
+      m["left"].get<size_t>(),
+      m["right"].get<size_t>(),
+      m["distance"].get<float>()
+    });
+  }
+
+  // Parse chunks
+  vector<DiffChunk> all_chunks;
+  for (const auto& c : input["chunks"]) {
+    all_chunks.push_back(chunk_from_json(c));
+  }
+
+  if (verbose >= 1) cerr << "Loaded " << all_chunks.size() << " chunks, " << merges.size() << " merges" << endl;
+  if (verbose >= 1) cerr << "Applying threshold " << threshold << endl;
+
+  // Get clusters at threshold
+  vector<vector<int>> clusters = get_clusters_at_threshold(merges, threshold);
+  if (verbose >= 1) cerr << "Found " << clusters.size() << " clusters" << endl;
+
+  // Group chunks by cluster and create patches
+  filesystem::remove_all("/tmp/gcommit");
+  filesystem::create_directories("/tmp/gcommit");
+
+  vector<vector<string>> clusters_patch_paths;
 
   for (size_t i = 0; i < clusters.size(); i++) {
     const vector<int>& cluster = clusters[i];
+    if (verbose >= 1) cerr << "Cluster " << i << ": " << cluster.size() << " chunks" << endl;
 
-    if (verbose >= 1) cerr << "Cluster " << (i + 1) << ":" << endl;
-
-    for (int idx: cluster) {
-      all_cluster_chunks.push_back(all_chunks[idx]);
+    // Gather chunks for this cluster
+    vector<DiffChunk> cluster_chunks;
+    for (int idx : cluster) {
+      cluster_chunks.push_back(all_chunks[idx]);
     }
-    size_t prev_end = cluster_end_idx.empty() ? 0 : cluster_end_idx.back();
-    cluster_end_idx.push_back(prev_end + cluster.size());
-  }
 
-  vector<string> patches = createPatches(all_cluster_chunks);
-  vector<vector<string>> clusters_patch_paths;
+    // Create patches for this cluster
+    vector<string> patches = createPatches(cluster_chunks);
 
-  for (size_t i = 0; i < cluster_end_idx.size(); i++) {
-    clusters_patch_paths.push_back(vector<string>());
-    string cluster_dir = "/tmp/patches/cluster_" + to_string(i);
+    string cluster_dir = "/tmp/gcommit/cluster_" + to_string(i);
     filesystem::create_directories(cluster_dir);
 
-    size_t start_idx = (i == 0) ? 0 : cluster_end_idx[i - 1];
-    size_t end_idx = cluster_end_idx[i];
-
+    vector<string> patch_paths;
     int patch_num = 0;
-    for (size_t j = start_idx; j < end_idx && j < patches.size(); j++) {
+    for (size_t j = 0; j < patches.size(); j++) {
       if (patches[j].empty()) {
-        if (verbose >= 1) cerr << "Skipping empty patch at index " << j << endl;
+        if (verbose >= 1) cerr << "Skipping empty patch" << endl;
         continue;
       }
       string patch_path = cluster_dir + "/patch_" + to_string(patch_num++) + ".patch";
       ofstream patch_file(patch_path);
       patch_file << patches[j];
       patch_file.close();
-      clusters_patch_paths.back().push_back(patch_path);
+      patch_paths.push_back(patch_path);
       if (verbose >= 1) cerr << "Wrote " << patch_path << endl;
     }
+    clusters_patch_paths.push_back(patch_paths);
   }
 
+  // Generate commit messages
+  AsyncHTTPSConnection conn(verbose);
+  AsyncOpenAIAPI openai_api(conn, api_key);
   vector<future<string>> message_futures;
   vector<ClusteredCommit> commits;
-  int cluster_idx = 0;
-  for (vector<string>& patch_paths: clusters_patch_paths) {
+
+  for (size_t i = 0; i < clusters_patch_paths.size(); i++) {
+    vector<string>& patch_paths = clusters_patch_paths[i];
     if (patch_paths.empty()) {
       if (verbose >= 1) cerr << "Skipping cluster with no valid patches" << endl;
-      cluster_idx++;
       continue;
     }
-    string diff_context = "";
-    ClusteredCommit commit{cluster_idx, vector<string>(), "empty commit"};
-    for (string path: patch_paths) {
-      ifstream patch_file;
-      patch_file.open(path);
 
+    string diff_context = "";
+    ClusteredCommit commit{static_cast<int>(i), vector<string>(), "empty commit"};
+
+    for (const string& path : patch_paths) {
+      ifstream patch_file(path);
       if (!patch_file.is_open()) {
-        cerr << "Error opening file!" << endl;
+        cerr << "Error opening file: " << path << endl;
         return 1;
       }
 
       string line;
       while (getline(patch_file, line)) {
-        if (line[0] == '+') {
+        if (!line.empty() && line[0] == '+') {
           diff_context += "Insertion: ";
-        }
-        else if (line[0] == '-') {
+        } else if (!line.empty() && line[0] == '-') {
           diff_context += "Deletion: ";
         }
         diff_context += line + "\n";
@@ -254,7 +324,6 @@ int main(int argc, char *argv[]) {
 
     message_futures.push_back(async_generate_commit_message(openai_api, diff_context));
     commits.push_back(commit);
-    cluster_idx++;
   }
 
   openai_api.run_requests();
@@ -263,51 +332,16 @@ int main(int argc, char *argv[]) {
     commits[i].message = message_futures[i].get();
   }
 
+  // Output commits JSON
   json output;
-
   json commits_json = json::array();
   for (const ClusteredCommit& commit : commits) {
     commits_json.push_back(commit.to_json());
   }
   output["commits"] = commits_json;
 
-  if (interactive) {
-    json viz_output;
-
-    json points_json = json::array();
-    for (size_t i = 0; i < all_chunks.size(); i++) {
-      string preview = combineContent(all_chunks[i]);
-      if (preview.size() > 100) preview = preview.substr(0, 100) + "...";
-
-      double x = (i < umap_points.size()) ? umap_points[i].x : 0.0;
-      double y = (i < umap_points.size()) ? umap_points[i].y : 0.0;
-
-      points_json.push_back({
-        {"id", i},
-        {"x", x},
-        {"y", y},
-        {"cluster_id", chunk_to_cluster[i]},
-        {"filepath", all_chunks[i].filepath},
-        {"preview", preview}
-      });
-    }
-    viz_output["points"] = points_json;
-
-    json clusters_json = json::array();
-    for (size_t i = 0; i < commits.size(); i++) {
-      clusters_json.push_back({
-        {"id", commits[i].cluster_id},
-        {"message", commits[i].message}
-      });
-    }
-    viz_output["clusters"] = clusters_json;
-
-    output["visualization"] = viz_output;
-  }
-
   cout << output.dump() << endl;
 
   if (verbose >= 1) cerr << "Output complete." << endl;
-
   return 0;
 }
