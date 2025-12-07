@@ -8,6 +8,11 @@ type Props = {
 	onFileSelect?: (index: number, filepath: string) => void;
 };
 
+const truncateWithEllipsis = (text: string, maxLength: number): string => {
+	if (text.length <= maxLength) return text;
+	return text.slice(0, maxLength - 1) + '…';
+};
+
 export default function FileTree({files, focused, maxHeight = 20, onFileSelect}: Props) {
 	const [selectedIndex, setSelectedIndex] = useState(0);
 
@@ -69,9 +74,10 @@ export default function FileTree({files, focused, maxHeight = 20, onFileSelect}:
 							<Text
 								color={isSelected ? 'cyan' : undefined}
 								inverse={isSelected}
+								wrap="truncate-end"
 							>
 								{isSelected ? '▶ ' : '  '}
-								{filename}
+								{truncateWithEllipsis(filename, 19)}
 							</Text>
 						</Box>
 					);
