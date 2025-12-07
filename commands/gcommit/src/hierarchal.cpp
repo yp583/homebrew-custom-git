@@ -1,7 +1,3 @@
-// DEPRECATED: Use hdbscan.hpp instead. Kept for reference.
-// This implementation uses single-linkage which causes chaining issues.
-// See .plans/01-hdbscan.md for migration details.
-
 #include "hierarchal.hpp"
 
 void print_dist_mat(vector<vector<float>>& dist_mat) {

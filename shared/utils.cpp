@@ -17,7 +17,7 @@ vector<float> parse_embedding(const string& response) {
         vector<float> embedding = j["data"][0]["embedding"].get<vector<float>>();
         return embedding;
     } catch (json::exception& e) {
-        cout << "JSON parsing error with response: " << response << endl;
+        cerr << "JSON parsing error with response: " << response << endl;
         return vector<float>();
     }
 }
@@ -56,7 +56,7 @@ string parse_chat_response(const string& response) {
 
         return message.substr(start, end - start + 1);
     } catch (json::exception& e) {
-        cout << "Chat JSON parsing error with response: " << response << endl;
+        cerr << "Chat JSON parsing error with response: " << response << endl;
         return "update code"; // fallback message
     }
 }

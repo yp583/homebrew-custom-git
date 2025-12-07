@@ -1,8 +1,8 @@
 class CustomGit < Formula
   desc "AI-powered git commit commands with semantic clustering"
   homepage "https://github.com/yp583/custom-git"
-  url "https://github.com/yp583/homebrew-custom-git/archive/refs/tags/v0.1.3.tar.gz"
-  sha256 "1b6da357857ffbb4bb8c519c2719f25faf8f22d48ad6d7afd4855753ccd6638f"
+  url "https://github.com/yp583/homebrew-custom-git/archive/refs/tags/v0.1.4.tar.gz"
+  sha256 "aff1d3e2ab626b1e41903328ccbe3d0566b3a1d879f88ab1d07d4a07878fa0d1"
   license "MIT"
 
   head "https://github.com/yp583/custom-git.git", branch: "main"

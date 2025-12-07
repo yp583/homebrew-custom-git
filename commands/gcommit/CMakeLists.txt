@@ -85,21 +85,6 @@ CPMAddPackage(
   OPTIONS "UMAPPP_FETCH_EXTERN ON"
 )
 
-# Add hdbscan-cpp for density-based clustering
-CPMAddPackage(
-  NAME hdbscan_cpp
-  GIT_REPOSITORY https://github.com/rohanmohapatra/hdbscan-cpp
-  GIT_TAG master
-)
-
-# Build hdbscan-cpp as a static library (auto-discover sources)
-file(GLOB_RECURSE HDBSCAN_SOURCES ${hdbscan_cpp_SOURCE_DIR}/HDBSCAN-CPP/*.cpp)
-add_library(hdbscan_lib STATIC ${HDBSCAN_SOURCES})
-
-target_include_directories(hdbscan_lib PUBLIC
-    ${hdbscan_cpp_SOURCE_DIR}/HDBSCAN-CPP
-)
-
 # Find OpenSSL
 find_package(OpenSSL REQUIRED)
 
@@ -139,7 +124,6 @@ target_link_libraries(custom_git_shared
 add_executable(git_gcommit.o
     src/main.cpp
     src/hierarchal.cpp
-    src/hdbscan.cpp
     src/kmeans.cpp
 )
 
@@ -153,5 +137,4 @@ target_include_directories(git_gcommit.o PRIVATE
 target_link_libraries(git_gcommit.o
     custom_git_shared
     libscran::umappp
-    hdbscan_lib
 ) 

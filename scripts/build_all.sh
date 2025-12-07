@@ -23,7 +23,13 @@ build_command() {
     fi
     
     cd "$cmd_dir"
-    
+
+    # Skip if no CMakeLists.txt (pure bash script commands)
+    if [ ! -f "CMakeLists.txt" ]; then
+        echo "SKIPPED: $cmd_name (no CMakeLists.txt - bash script only)"
+        return 0
+    fi
+
     # Create build directory and build
     mkdir -p build
     cd build

@@ -17,12 +17,15 @@ if [ ! -d "$BIN_DIR" ]; then
     mkdir -p "$BIN_DIR"
 fi
 
-# Function to build a command
-build_command() {
+# Build all commands using build_all.sh
+"$REPO_ROOT/scripts/build_all.sh"
+
+# Function to install a command
+install_command() {
     local cmd_name=$1
     local cmd_dir="$REPO_ROOT/commands/$cmd_name"
 
-    echo "Building $cmd_name..."
+    echo "Installing $cmd_name..."
 
     if [ ! -d "$cmd_dir" ]; then
         echo "ERROR: Command directory $cmd_dir not found"
@@ -31,34 +34,37 @@ build_command() {
 
     cd "$cmd_dir"
 
-    # Create build directory and build C++ binary
-    mkdir -p build
-    cd build
-    cmake .. || { echo "ERROR: CMake configuration failed for $cmd_name"; return 1; }
-    make || { echo "ERROR: Build failed for $cmd_name"; return 1; }
+    # Pure bash script command (no CMakeLists.txt)
+    if [ ! -f "CMakeLists.txt" ]; then
+        if [ -f "git-$cmd_name" ]; then
+            echo "Installing git-$cmd_name (bash script) to $BIN_DIR..."
+            cp "git-$cmd_name" "$BIN_DIR/"
+            chmod +x "$BIN_DIR/git-$cmd_name"
+            echo "SUCCESS: $cmd_name installed"
+            return 0
+        else
+            echo "ERROR: Script git-$cmd_name not found"
+            return 1
+        fi
+    fi
 
     # Copy C++ executable to ~/bin
-    if [ -f "git_${cmd_name}.o" ]; then
+    if [ -f "build/git_${cmd_name}.o" ]; then
         echo "Installing git_${cmd_name}.o to $BIN_DIR..."
-        cp "git_${cmd_name}.o" "$BIN_DIR/"
+        cp "build/git_${cmd_name}.o" "$BIN_DIR/"
         chmod +x "$BIN_DIR/git_${cmd_name}.o"
     else
-        echo "ERROR: Executable git_${cmd_name}.o not found"
+        echo "ERROR: Executable build/git_${cmd_name}.o not found"
         return 1
     fi
 
     # Check if terminal-ui exists (Node CLI is the entrypoint)
-    if [ -d "../terminal-ui" ]; then
-        echo "Building terminal-ui (Node CLI entrypoint) for $cmd_name..."
-        cd ../terminal-ui
-
-        # Install dependencies
-        npm install || { echo "ERROR: npm install failed for terminal-ui"; return 1; }
-
-        # Build the CLI
+    if [ -d "terminal-ui" ]; then
+        echo "Building terminal-ui for $cmd_name..."
+        cd terminal-ui
+        npm install || { echo "ERROR: npm install failed"; return 1; }
         npm run build || { echo "ERROR: terminal-ui build failed"; return 1; }
 
-        # Copy dist/cli.js as git-gcommit (self-contained bundle)
         if [ -f "dist/cli.js" ]; then
             echo "Installing git-$cmd_name (Node CLI) to $BIN_DIR..."
             cp "dist/cli.js" "$BIN_DIR/git-$cmd_name"
@@ -67,12 +73,11 @@ build_command() {
             echo "ERROR: dist/cli.js not found"
             return 1
         fi
-        cd ../build
     else
-        # Fallback: copy bash script if no terminal-ui (for other commands like mcommit)
-        if [ -f "../git-$cmd_name" ]; then
+        # Copy bash script wrapper
+        if [ -f "git-$cmd_name" ]; then
             echo "Installing git-$cmd_name to $BIN_DIR..."
-            cp "../git-$cmd_name" "$BIN_DIR/"
+            cp "git-$cmd_name" "$BIN_DIR/"
             chmod +x "$BIN_DIR/git-$cmd_name"
         else
             echo "ERROR: Script git-$cmd_name not found"
@@ -80,15 +85,16 @@ build_command() {
         fi
     fi
 
-    echo "SUCCESS: $cmd_name installed successfully"
+    echo "SUCCESS: $cmd_name installed"
 }
 
-# Build all commands in the commands directory
-echo "Discovering commands..."
+# Install all commands
+echo ""
+echo "Installing commands..."
 for cmd_dir in "$REPO_ROOT/commands"/*; do
     if [ -d "$cmd_dir" ]; then
         cmd_name=$(basename "$cmd_dir")
-        build_command "$cmd_name"
+        install_command "$cmd_name"
     fi
 done
 

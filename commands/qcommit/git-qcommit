@@ -1,0 +1,30 @@
+#!/bin/bash
+
+set -e
+
+if [[ $# -eq 0 ]] || [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+  echo "Usage: git qcommit <n>"
+  echo "Commits staged changes with predefined message from git config."
+  echo ""
+  echo "Setup: git config --global qcommit.m<n> \"your message\""
+  echo "Example: git config --global qcommit.m1 \"merged\""
+  exit 0
+fi
+
+MESSAGE_NUM="$1"
+
+MESSAGE=$(git config --get "qcommit.m$MESSAGE_NUM" 2>/dev/null || true)
+
+if [[ -z "$MESSAGE" ]]; then
+  echo "Error: No message defined for qcommit.m$MESSAGE_NUM"
+  echo "Set it with: git config --global qcommit.m$MESSAGE_NUM \"your message\""
+  exit 1
+fi
+
+if git diff --cached --quiet; then
+  echo "Error: No staged changes to commit."
+  exit 1
+fi
+
+git commit -m "$MESSAGE"
+echo "Committed with message: $MESSAGE"

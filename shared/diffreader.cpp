@@ -1,7 +1,6 @@
 #include "diffreader.hpp"
 #include <vector>
 #include <fstream>
-#include <set>
 #include <map>
 
 DiffReader::DiffReader(istream& in, bool verbose)
@@ -156,6 +155,8 @@ int getNumLines(string filepath) {
     return count;
 }
 
+
+
 string createPatch(DiffChunk chunk, bool include_file_header) {
     string patch;
     bool is_rename = (chunk.old_filepath != chunk.filepath) && !chunk.is_new && !chunk.is_deleted;
@@ -215,15 +216,28 @@ string createPatch(DiffChunk chunk, bool include_file_header) {
     return patch;
 }
 
+string createDeletePatch(string filepath) {
+    string delete_patch = "diff --git a/" + filepath + " b/" + filepath + "\n";
+    delete_patch += "deleted file mode 100644\n";
+    delete_patch += "--- a/" + filepath + "\n";
+    delete_patch += "+++ /dev/null\n";
+    return delete_patch;
+}
+
 vector<string> createPatches(vector<DiffChunk> chunks) {
     vector<string> patches;
     unordered_map<string, string> renamed_files;
     unordered_map<string, map<int, int>> file_cumulative_deltas;
 
     unordered_map<string, size_t> deleted_file_last_idx;
+    unordered_map<string, size_t> new_file_first_idx;
+    
     for (size_t i = 0; i < chunks.size(); i++) {
         if (chunks[i].is_deleted) {
             deleted_file_last_idx[chunks[i].filepath] = i;
+        }
+        if (chunks[i].is_new && new_file_first_idx.find(chunks[i].filepath) == new_file_first_idx.end()) {
+            new_file_first_idx[chunks[i].filepath] = i;
         }
     }
 
@@ -241,6 +255,12 @@ vector<string> createPatches(vector<DiffChunk> chunks) {
 
         bool is_deleted_file = chunk.is_deleted;
         string filepath = chunk.filepath;
+
+        // Only first chunk of a new file gets is_new for patch generation
+        auto new_it = new_file_first_idx.find(filepath);
+        if (chunk.is_new && (new_it == new_file_first_idx.end() || new_it->second != i)) {
+            chunk.is_new = false;
+        }
 
         chunk.is_deleted = false;
 
@@ -276,10 +296,7 @@ vector<string> createPatches(vector<DiffChunk> chunks) {
 
         auto del_it = deleted_file_last_idx.find(filepath);
         if (is_deleted_file && del_it != deleted_file_last_idx.end() && del_it->second == i) {
-            string delete_patch = "diff --git a/" + filepath + " b/" + filepath + "\n";
-            delete_patch += "deleted file mode 100644\n";
-            delete_patch += "--- a/" + filepath + "\n";
-            delete_patch += "+++ /dev/null\n";
+            string delete_patch = createDeletePatch(filepath);
             patches.push_back(delete_patch);
         }
     }
