@@ -163,6 +163,21 @@ int run_merge_mode(int verbose) {
   vector<MergeEvent> merges = hc.cluster(embeddings);
   if (verbose >= 1) cerr << "Clustering complete. " << merges.size() << " merge events" << endl;
 
+  // Run UMAP for visualization
+  vector<UmapPoint> umap_points;
+  if (embeddings.size() >= 3) {
+    if (verbose >= 1) cerr << "Running UMAP dimensionality reduction..." << endl;
+    try {
+      umap_points = compute_umap(embeddings);
+      if (verbose >= 1) cerr << "UMAP complete." << endl;
+    } catch (const exception& e) {
+      if (verbose >= 1) cerr << "UMAP failed: " << e.what() << endl;
+      umap_points = {};
+    }
+  } else {
+    if (verbose >= 1) cerr << "Skipping UMAP (need >= 3 chunks)" << endl;
+  }
+
   // Build output JSON
   json output;
 
@@ -188,11 +203,26 @@ int run_merge_mode(int verbose) {
   dendrogram["max_distance"] = max_distance;
   output["dendrogram"] = dendrogram;
 
-  // Chunks
+  // Chunks with UMAP coordinates
   json chunks_json = json::array();
   for (size_t i = 0; i < all_chunks.size(); i++) {
     json chunk_j = chunk_to_json(all_chunks[i]);
     chunk_j["index"] = i;
+
+    // Add UMAP coordinates for visualization
+    if (i < umap_points.size()) {
+      chunk_j["umap_x"] = umap_points[i].x;
+      chunk_j["umap_y"] = umap_points[i].y;
+    } else {
+      chunk_j["umap_x"] = 0.0;
+      chunk_j["umap_y"] = 0.0;
+    }
+
+    // Add preview for scatter plot tooltip
+    string preview = combineContent(all_chunks[i]);
+    if (preview.size() > 100) preview = preview.substr(0, 100) + "...";
+    chunk_j["preview"] = preview;
+
     chunks_json.push_back(chunk_j);
   }
   output["chunks"] = chunks_json;
@@ -332,13 +362,53 @@ int run_threshold_mode(float threshold, const string& json_path, int verbose) {
     commits[i].message = message_futures[i].get();
   }
 
-  // Output commits JSON
+  // Build chunk-to-cluster mapping
+  vector<int> chunk_to_cluster(all_chunks.size(), -1);
+  for (size_t i = 0; i < clusters.size(); i++) {
+    for (int idx : clusters[i]) {
+      chunk_to_cluster[idx] = static_cast<int>(i);
+    }
+  }
+
+  // Output JSON with commits and visualization
   json output;
+
+  // Commits
   json commits_json = json::array();
   for (const ClusteredCommit& commit : commits) {
     commits_json.push_back(commit.to_json());
   }
   output["commits"] = commits_json;
+
+  // Visualization data
+  json viz_output;
+
+  // Points with cluster assignments
+  json points_json = json::array();
+  for (const auto& c : input["chunks"]) {
+    size_t idx = c["index"].get<size_t>();
+    points_json.push_back({
+      {"id", idx},
+      {"x", c.value("umap_x", 0.0)},
+      {"y", c.value("umap_y", 0.0)},
+      {"cluster_id", chunk_to_cluster[idx]},
+      {"filepath", c["filepath"].get<string>()},
+      {"preview", c.value("preview", "")}
+    });
+  }
+  viz_output["points"] = points_json;
+
+  // Clusters with messages
+  json clusters_meta = json::array();
+  for (size_t i = 0; i < commits.size(); i++) {
+    clusters_meta.push_back({
+      {"id", commits[i].cluster_id},
+      {"message", commits[i].message}
+    });
+  }
+  viz_output["clusters"] = clusters_meta;
+
+  output["visualization"] = viz_output;
 
   cout << output.dump() << endl;
 
