@@ -156,6 +156,8 @@ int getNumLines(string filepath) {
     return count;
 }
 
+
+
 string createPatch(DiffChunk chunk, bool include_file_header) {
     string patch;
     bool is_rename = (chunk.old_filepath != chunk.filepath) && !chunk.is_new && !chunk.is_deleted;
@@ -213,6 +215,14 @@ string createPatch(DiffChunk chunk, bool include_file_header) {
     }
 
     return patch;
+}
+
+string createDeletePatch(string filepath) {
+    string delete_patch = "diff --git a/" + filepath + " b/" + filepath + "\n";
+    delete_patch += "deleted file mode 100644\n";
+    delete_patch += "--- a/" + filepath + "\n";
+    delete_patch += "+++ /dev/null\n";
+    return delete_patch;
 }
 
 vector<string> createPatches(vector<DiffChunk> chunks) {
@@ -276,10 +286,7 @@ vector<string> createPatches(vector<DiffChunk> chunks) {
 
         auto del_it = deleted_file_last_idx.find(filepath);
         if (is_deleted_file && del_it != deleted_file_last_idx.end() && del_it->second == i) {
-            string delete_patch = "diff --git a/" + filepath + " b/" + filepath + "\n";
-            delete_patch += "deleted file mode 100644\n";
-            delete_patch += "--- a/" + filepath + "\n";
-            delete_patch += "+++ /dev/null\n";
+            string delete_patch = createDeletePatch(filepath);
             patches.push_back(delete_patch);
         }
     }

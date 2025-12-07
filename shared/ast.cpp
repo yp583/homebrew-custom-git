@@ -25,6 +25,18 @@ int calculateLineOffset(const vector<DiffLine> &lines, size_t startIdx, size_t e
   return offset;
 }
 
+size_t byteToLineIndex(const vector<DiffLine> &lines, size_t bytePos) {
+  size_t currentByte = 0;
+  for (size_t i = 0; i < lines.size(); i++) {
+    size_t lineEnd = currentByte + lines[i].content.length() + 1;
+    if (bytePos < lineEnd) {
+      return i;
+    }
+    currentByte = lineEnd;
+  }
+  return lines.empty() ? 0 : lines.size() - 1;
+}
+
 vector<DiffChunk> chunkByLines(const DiffChunk &inputChunk, size_t maxChars) {
   vector<DiffChunk> chunks;
 
@@ -92,119 +104,72 @@ TSLanguage *tree_sitter_javascript();
 TSLanguage *tree_sitter_go();
 }
 
-vector<DiffLine> extractLinesInRangeUnique(const vector<DiffLine> &diffLines,
-                                           size_t startByte, size_t endByte,
-                                           set<int> &processedLineNums) {
-  vector<DiffLine> result;
-  size_t currentByte = 0;
-
-  for (const auto &line : diffLines) {
-    size_t lineStart = currentByte;
-    size_t lineEnd = currentByte + line.content.length() + 1;
-
-    if (lineStart < endByte && lineEnd > startByte &&
-        processedLineNums.find(line.line_num) == processedLineNums.end()) {
-      result.push_back(line);
-      processedLineNums.insert(line.line_num);
-    }
-
-    currentByte = lineEnd;
-
-    if (currentByte >= endByte) {
-      break;
-    }
-  }
-
-  return result;
-}
-
-int findLineIndex(const vector<DiffLine> &allLines, int target_line_num) {
-  for (size_t i = 0; i < allLines.size(); i++) {
-    if (allLines[i].line_num == target_line_num) {
-      return i;
-    }
-  }
-  return 0;
-}
-
-DiffChunk fillGapLines(const DiffChunk &chunk, const vector<DiffLine> &allLines) {
-  if (chunk.lines.empty())
-    return chunk;
-
-  DiffChunk result = chunk;
-  result.lines.clear();
-
-  int minLineNum = chunk.lines.front().line_num;
-  int maxLineNum = chunk.lines.back().line_num;
-
-  for (const auto &line : allLines) {
-    if (line.line_num >= minLineNum && line.line_num <= maxLineNum) {
-      result.lines.push_back(line);
-    }
-  }
-
-  return result;
-}
-
 vector<DiffChunk> chunkDiffInternal(const ts::Node &node, const DiffChunk &diffChunk,
-                                     set<int> &processedLineNums, size_t maxChars) {
+                                     size_t maxChars) {
   vector<DiffChunk> newChunks;
-  DiffChunk currentChunk;
-  currentChunk.filepath = diffChunk.filepath;
-  currentChunk.old_filepath = diffChunk.old_filepath;
-  currentChunk.start = diffChunk.start;
-  size_t currentChunkSize = 0;
-  bool currentChunkStartSet = false;
+
+  if (diffChunk.lines.empty()) {
+    return newChunks;
+  }
+
+  // Collect split points (line indices where AST nodes end)
+  vector<size_t> splitPoints;
+  splitPoints.push_back(0);
 
   for (size_t i = 0; i < node.getNumChildren(); i++) {
     ts::Node child = node.getChild(i);
-    auto byteRange = child.getByteRange();
-
-    vector<DiffLine> childLines = extractLinesInRangeUnique(
-        diffChunk.lines, byteRange.start, byteRange.end, processedLineNums);
-    size_t childSize = calculateDiffLinesSize(childLines);
-
-    if (childSize > maxChars) {
-      if (!currentChunk.lines.empty()) {
-        newChunks.push_back(fillGapLines(currentChunk, diffChunk.lines));
-        currentChunk = DiffChunk();
-        currentChunk.filepath = diffChunk.filepath;
-        currentChunk.old_filepath = diffChunk.old_filepath;
-        currentChunkSize = 0;
-        currentChunkStartSet = false;
-      }
-      auto childChunks = chunkDiffInternal(child, diffChunk, processedLineNums, maxChars);
-      newChunks.insert(newChunks.end(), childChunks.begin(), childChunks.end());
-    } else if (currentChunkSize + childSize > maxChars) {
-      newChunks.push_back(fillGapLines(currentChunk, diffChunk.lines));
-      currentChunk = DiffChunk();
-      currentChunk.filepath = diffChunk.filepath;
-      currentChunk.old_filepath = diffChunk.old_filepath;
-      currentChunk.lines = childLines;
-      currentChunkSize = childSize;
-
-      if (!childLines.empty()) {
-        int firstLineIdx = findLineIndex(diffChunk.lines, childLines[0].line_num);
-        currentChunk.start = diffChunk.start + calculateLineOffset(diffChunk.lines, 0, firstLineIdx);
-      }
-      currentChunkStartSet = true;
-    } else {
-      if (!currentChunkStartSet && !childLines.empty()) {
-        int firstLineIdx = findLineIndex(diffChunk.lines, childLines[0].line_num);
-        currentChunk.start = diffChunk.start + calculateLineOffset(diffChunk.lines, 0, firstLineIdx);
-        currentChunkStartSet = true;
-      }
-      currentChunk.lines.insert(currentChunk.lines.end(), childLines.begin(),
-                                childLines.end());
-      currentChunkSize += childSize;
+    size_t endLineIdx = byteToLineIndex(diffChunk.lines, child.getByteRange().end);
+    size_t splitPoint = endLineIdx + 1;
+    if (splitPoint > splitPoints.back() && splitPoint <= diffChunk.lines.size()) {
+      splitPoints.push_back(splitPoint);
     }
   }
 
-  if (!currentChunk.lines.empty()) {
-    newChunks.push_back(fillGapLines(currentChunk, diffChunk.lines));
+  if (splitPoints.back() < diffChunk.lines.size()) {
+    splitPoints.push_back(diffChunk.lines.size());
   }
 
-  // Assign is_new to first chunk, is_deleted to last chunk
+  // Create chunks from split ranges, respecting maxChars
+  DiffChunk currentChunk;
+  currentChunk.filepath = diffChunk.filepath;
+  currentChunk.old_filepath = diffChunk.old_filepath;
+  size_t currentChunkSize = 0;
+  size_t currentChunkStartIdx = 0;
+
+  for (size_t i = 0; i + 1 < splitPoints.size(); i++) {
+    size_t startIdx = splitPoints[i];
+    size_t endIdx = splitPoints[i + 1];
+
+    vector<DiffLine> segmentLines(
+      diffChunk.lines.begin() + startIdx,
+      diffChunk.lines.begin() + endIdx
+    );
+    size_t segmentSize = calculateDiffLinesSize(segmentLines);
+
+    if (!currentChunk.lines.empty() && currentChunkSize + segmentSize > maxChars) {
+      currentChunk.start = diffChunk.start + calculateLineOffset(diffChunk.lines, 0, currentChunkStartIdx);
+      newChunks.push_back(currentChunk);
+      currentChunk = DiffChunk();
+      currentChunk.filepath = diffChunk.filepath;
+      currentChunk.old_filepath = diffChunk.old_filepath;
+      currentChunkSize = 0;
+      currentChunkStartIdx = startIdx;
+    }
+
+    if (currentChunk.lines.empty()) {
+      currentChunkStartIdx = startIdx;
+    }
+
+    currentChunk.lines.insert(currentChunk.lines.end(),
+                               segmentLines.begin(), segmentLines.end());
+    currentChunkSize += segmentSize;
+  }
+
+  if (!currentChunk.lines.empty()) {
+    currentChunk.start = diffChunk.start + calculateLineOffset(diffChunk.lines, 0, currentChunkStartIdx);
+    newChunks.push_back(currentChunk);
+  }
+
   if (!newChunks.empty()) {
     newChunks.front().is_new = diffChunk.is_new;
     newChunks.back().is_deleted = diffChunk.is_deleted;
@@ -215,8 +180,7 @@ vector<DiffChunk> chunkDiffInternal(const ts::Node &node, const DiffChunk &diffC
 
 vector<DiffChunk> chunkDiff(const ts::Node &node, const DiffChunk &diffChunk,
                             size_t maxChars) {
-  set<int> processedLineNums;
-  return chunkDiffInternal(node, diffChunk, processedLineNums, maxChars);
+  return chunkDiffInternal(node, diffChunk, maxChars);
 }
 
 ts::Tree codeToTree(const string &code, const string &language) {

@@ -8,7 +8,6 @@
 #include <vector>
 #include <cpp-tree-sitter.h>
 #include <vector>
-#include <set>
 #include "diffreader.hpp"
 
 using namespace std;
