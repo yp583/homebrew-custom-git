@@ -17,7 +17,7 @@ vector<float> parse_embedding(const string& response) {
         vector<float> embedding = j["data"][0]["embedding"].get<vector<float>>();
         return embedding;
     } catch (json::exception& e) {
-        cout << "JSON parsing error with response: " << response << endl;
+        cerr << "JSON parsing error with response: " << response << endl;
         return vector<float>();
     }
 }
