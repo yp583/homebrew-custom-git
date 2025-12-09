@@ -303,3 +303,46 @@ vector<string> createPatches(vector<DiffChunk> chunks) {
 
     return patches;
 }
+
+nlohmann::json chunk_to_json(const DiffChunk& chunk) {
+    using json = nlohmann::json;
+
+    json lines_json = json::array();
+    for (const auto& line : chunk.lines) {
+        lines_json.push_back({
+            {"mode", static_cast<int>(line.mode)},
+            {"content", line.content},
+            {"line_num", line.line_num}
+        });
+    }
+
+    return json{
+        {"filepath", chunk.filepath},
+        {"old_filepath", chunk.old_filepath},
+        {"lines", lines_json},
+        {"start", chunk.start},
+        {"is_deleted", chunk.is_deleted},
+        {"is_new", chunk.is_new},
+        {"is_rename", chunk.is_rename}
+    };
+}
+
+DiffChunk chunk_from_json(const nlohmann::json& j) {
+    DiffChunk chunk;
+    chunk.filepath = j["filepath"].get<string>();
+    chunk.old_filepath = j["old_filepath"].get<string>();
+    chunk.start = j["start"].get<int>();
+    chunk.is_deleted = j["is_deleted"].get<bool>();
+    chunk.is_new = j["is_new"].get<bool>();
+    chunk.is_rename = j["is_rename"].get<bool>();
+
+    for (const auto& line_json : j["lines"]) {
+        DiffLine line;
+        line.mode = static_cast<DiffMode>(line_json["mode"].get<int>());
+        line.content = line_json["content"].get<string>();
+        line.line_num = line_json["line_num"].get<int>();
+        chunk.lines.push_back(line);
+    }
+
+    return chunk;
+}

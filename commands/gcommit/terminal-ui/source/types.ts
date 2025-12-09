@@ -26,10 +26,30 @@ export type ProcessingResult = {
   commits: CommitData[];
 };
 
+// Dendrogram types
+export type MergeEvent = {
+  left: number;
+  right: number;
+  distance: number;
+};
+
+export type DendrogramData = {
+  labels: string[];      // filepath for each leaf (chunk)
+  merges: MergeEvent[];  // merge events to draw the tree
+  max_distance: number;  // for scaling x-axis
+};
+
+export type MergePhaseResult = {
+  dendrogram: DendrogramData;
+  chunks: unknown[];  // opaque - only used by C++ in phase 2
+};
+
 export type Phase =
   | 'init'
   | 'dev-confirm'
   | 'processing'
+  | 'dendrogram'
+  | 'threshold-processing'
   | 'applying'
   | 'visualization'
   | 'merging'

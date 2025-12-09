@@ -8,7 +8,8 @@ import FileTree from './components/FileTree.js';
 import DiffViewer from './components/DiffViewer.js';
 import ScatterPlot from './components/ScatterPlot.js';
 import ClusterLegend from './components/ClusterLegend.js';
-import type { Phase, ProcessingResult, DiffLine } from './types.js';
+import Dendrogram from './components/Dendrogram.js';
+import type { Phase, ProcessingResult, DiffLine, MergePhaseResult, DendrogramData } from './types.js';
 import { parseFullContextDiff } from './utils/diffUtils.js';
 
 type Props = {
@@ -28,6 +29,11 @@ function AppContent({ threshold, verbose, dev }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState('Initializing...');
   const [stderr, setStderr] = useState<string>('');
+
+  // Dendrogram state
+  const [dendrogramData, setDendrogramData] = useState<DendrogramData | null>(null);
+  const [mergePhaseJson, setMergePhaseJson] = useState<string>('');
+  const [selectedThreshold, setSelectedThreshold] = useState(threshold);
 
   // Visualization state
   const [viewMode, setViewMode] = useState<'scatter' | 'diff'>('diff');
@@ -58,35 +64,33 @@ function AppContent({ threshold, verbose, dev }: Props) {
       await git.cleanup();
       if (deletePatches) {
         const fs = await import('fs/promises');
-        await fs.rm('/tmp/patches', { recursive: true, force: true });
+        await fs.rm('/tmp/gcommit', { recursive: true, force: true });
       }
-    } catch {
-      // Ignore cleanup errors
+    } catch (err) {
+      process.stderr.write(`Error during cleanup: ${err}\n`);
     }
   }, [git]);
 
-  // Global cleanup on process exit/interrupt
+  // Handle external termination signals (SIGTERM, SIGHUP)
   useEffect(() => {
-    const handleExit = () => { performCleanup(phase !== 'error'); };
-    const handleSignal = () => { performCleanup(phase !== 'error').then(() => exit()); };
-
-    process.on('exit', handleExit);
-    process.on('SIGINT', handleSignal);
-    process.on('SIGTERM', handleSignal);
-
-    return () => {
-      process.off('exit', handleExit);
-      process.off('SIGINT', handleSignal);
-      process.off('SIGTERM', handleSignal);
+    const handleSignal = () => {
+      performCleanup().then(() => exit());
     };
-  }, [performCleanup, phase]);
+    process.on('SIGTERM', handleSignal);
+    process.on('SIGHUP', handleSignal);
+    return () => {
+      process.off('SIGTERM', handleSignal);
+      process.off('SIGHUP', handleSignal);
+    };
+  }, [performCleanup, exit]);
 
   // Phase functions
   const runInit = useCallback(async () => {
     try {
       setStatusMessage('Initializing...');
       const fs = await import('fs/promises');
-      await fs.rm('/tmp/patches', { recursive: true, force: true });
+      await fs.rm('/tmp/gcommit', { recursive: true, force: true });
+      await fs.mkdir('/tmp/gcommit', { recursive: true });
 
       setStatusMessage('Creating staging branch...');
       await git.createStagingBranch();
@@ -99,11 +103,13 @@ function AppContent({ threshold, verbose, dev }: Props) {
     }
   }, [git, goToPhase, performCleanup]);
 
+  // Phase 1: Run merge mode to get dendrogram
   const runProcessing = useCallback(async () => {
     try {
-      setStatusMessage('Analyzing changes with AI...');
+      setStatusMessage('Analyzing changes with AI ...');
 
       const { execa } = await import('execa');
+      const fs = await import('fs/promises');
       const diff = git.stagedDiff;
 
       if (dev) {
@@ -113,7 +119,7 @@ function AppContent({ threshold, verbose, dev }: Props) {
 
       const scriptDir = dirname(fileURLToPath(import.meta.url));
       const binaryPath = join(scriptDir, 'git_gcommit.o');
-      const args = ['-d', String(threshold), '-i'];
+      const args = ['-m'];
       if (verbose) args.push('-v');
 
       const result = await execa(binaryPath, args, {
@@ -125,8 +131,45 @@ function AppContent({ threshold, verbose, dev }: Props) {
         setStderr(result.stderr);
       }
 
-      const data: ProcessingResult = JSON.parse(result.stdout);
-      setProcessingResult(data);
+      // Save output to temp file for phase 2
+      const jsonPath = '/tmp/gcommit/state.json';
+      await fs.writeFile(jsonPath, result.stdout);
+      setMergePhaseJson(jsonPath);
+
+      // Parse dendrogram data for UI
+      const data: MergePhaseResult = JSON.parse(result.stdout);
+      setDendrogramData(data.dendrogram);
+
+      goToPhase('dendrogram');
+    } catch (err: any) {
+      setError(err.message);
+      setPhase('error');
+      await performCleanup(false);
+    }
+  }, [git.stagedDiff, verbose, goToPhase, performCleanup]);
+
+  // Phase 2: Run threshold mode to get commits
+  const runThresholdProcessing = useCallback(async () => {
+    try {
+      setStatusMessage('Applying threshold and generating commits...');
+
+      const { execa } = await import('execa');
+
+      const scriptDir = dirname(fileURLToPath(import.meta.url));
+      const binaryPath = join(scriptDir, 'git_gcommit.o');
+      const args = ['-t', String(selectedThreshold), mergePhaseJson];
+      if (verbose) args.push('-v');
+
+      const result = await execa(binaryPath, args, {
+        encoding: 'utf8',
+      });
+
+      if (result.stderr) {
+        setStderr(prev => prev + '\n' + result.stderr);
+      }
+
+      const data: { commits: ProcessingResult['commits'] } = JSON.parse(result.stdout);
+      setProcessingResult({ commits: data.commits, visualization: { points: [], clusters: [] } });
 
       goToPhase('applying');
     } catch (err: any) {
@@ -134,7 +177,7 @@ function AppContent({ threshold, verbose, dev }: Props) {
       setPhase('error');
       await performCleanup(false);
     }
-  }, [git.stagedDiff, threshold, verbose, dev, goToPhase, performCleanup]);
+  }, [selectedThreshold, mergePhaseJson, verbose, goToPhase, performCleanup]);
 
   const runApplying = useCallback(async () => {
     try {
@@ -226,6 +269,9 @@ function AppContent({ threshold, verbose, dev }: Props) {
       case 'processing':
         runProcessing();
         break;
+      case 'threshold-processing':
+        runThresholdProcessing();
+        break;
       case 'applying':
         runApplying();
         break;
@@ -241,12 +287,17 @@ function AppContent({ threshold, verbose, dev }: Props) {
       case 'error':
         exit();
         break;
-      // 'dev-confirm', 'visualization', 'done': UI-driven, no async work
     }
   }, [phase]);
 
   // Keyboard input handler
   useInput((input, key) => {
+    // Global Ctrl+C handler
+    if (key.ctrl && input === 'c') {
+      setPhase('cancelled');
+      return;
+    }
+
     // Dev mode confirmation
     if (phase === 'dev-confirm' && pendingPhase) {
       if (input === 'y' || key.return) {
@@ -305,7 +356,7 @@ function AppContent({ threshold, verbose, dev }: Props) {
     );
   }
 
-  if (phase === 'init' || phase === 'processing' || phase === 'applying') {
+  if (phase === 'init' || phase === 'processing' || phase === 'threshold-processing' || phase === 'applying') {
     return (
       <Box flexDirection="column">
         <Spinner label={statusMessage} />
@@ -315,6 +366,19 @@ function AppContent({ threshold, verbose, dev }: Props) {
           </Box>
         )}
       </Box>
+    );
+  }
+
+  // Dendrogram phase - user adjusts threshold
+  if (phase === 'dendrogram' && dendrogramData) {
+    return (
+      <Dendrogram
+        data={dendrogramData}
+        threshold={selectedThreshold}
+        onThresholdChange={setSelectedThreshold}
+        onConfirm={() => goToPhase('threshold-processing')}
+        onCancel={() => setPhase('cancelled')}
+      />
     );
   }
 

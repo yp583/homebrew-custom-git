@@ -62,7 +62,7 @@ export function GitProvider({ children, dev = false }: GitProviderProps) {
       await state.git.stash(['push', '-u', '-m', 'gcommit-temp']);
     }
 
-    const branchName = `gcommit-staging-${Date.now()}`;
+    const branchName = `gcommit/staging-${Date.now()}`;
     await state.git.checkoutLocalBranch(branchName);
 
     if (hasChanges) {
@@ -117,19 +117,21 @@ export function GitProvider({ children, dev = false }: GitProviderProps) {
     const originalBranch = originalBranchRef.current;
 
     if (stagingBranch) {
-      await state.git.add('-A');
       try {
+        await state.git.add('-A');
         await state.git.commit("commit to cleanup");
+      } catch {
+        // No changes to commit before checkout
       }
-      catch {
-        // no changes needing commit before checking out
+      try {
+        await state.git.checkout(originalBranch);
+        await state.git.deleteLocalBranch(stagingBranch, true);
+        await state.git.stash(['apply', "--index"]);
+      } catch (err) {
+        console.error("Failed during git cleanup:", err);
       }
-      await state.git.checkout(originalBranch);
-      await state.git.deleteLocalBranch(stagingBranch, true);
-      await state.git.stash(['apply', "--index"]);
-    }
-    else {
-      console.error("no staging branch name found")
+    } else {
+      console.error("No staging branch name found");
     }
   }, [state.git]);
 
