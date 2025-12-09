@@ -70,7 +70,8 @@ async function main() {
       threshold={cli.flags.threshold}
       verbose={cli.flags.verbose}
       dev={cli.flags.dev}
-    />
+    />,
+    { exitOnCtrlC: false }
   );
 
   await waitUntilExit();

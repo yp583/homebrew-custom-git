@@ -1,6 +1,7 @@
 import React from 'react';
 import {Text, Box, useInput} from 'ink';
 import type {DendrogramData, MergeEvent} from '../types.js';
+import {addConnection, removeConnection} from '../utils/consts.js';
 
 type Props = {
 	data: DendrogramData;
@@ -45,10 +46,94 @@ function truncateLabel(label: string, maxLen: number): string {
 	return label.slice(0, maxLen - 1) + '…';
 }
 
+function computeOptimalLeafOrder(merges: MergeEvent[], numLeaves: number): number[] {
+	if (numLeaves === 0) return [];
+	if (merges.length === 0) return Array.from({length: numLeaves}, (_, i) => i);
+
+	const clusterLeaves: Map<number, number[]> = new Map();
+	for (let i = 0; i < numLeaves; i++) {
+		clusterLeaves.set(i, [i]);
+	}
+
+	const parent: number[] = Array.from({length: numLeaves}, (_, i) => i);
+	const find = (i: number): number => {
+		if (parent[i] !== i) parent[i] = find(parent[i]!);
+		return parent[i]!;
+	};
+
+	for (const merge of merges) {
+		const rootA = find(merge.left);
+		const rootB = find(merge.right);
+
+		const leavesA = clusterLeaves.get(rootA)!;
+		const leavesB = clusterLeaves.get(rootB)!;
+
+		const merged = [...leavesA, ...leavesB];
+
+		parent[rootA] = rootB;
+		clusterLeaves.delete(rootA);
+		clusterLeaves.set(rootB, merged);
+	}
+
+	return [...clusterLeaves.values()][0] || [];
+}
+
 type GridCell = {
 	char: string;
 	color?: string;
 };
+
+type ClusterInfo = {
+	trunkY: number;  // Row where outgoing trunk is drawn
+	minY: number;    // Min row of all members
+	maxY: number;    // Max row of all members
+	lastX: number;
+	members: number[];
+	isLeaf: boolean; // True if this cluster hasn't merged yet (no vertical connector at lastX)
+};
+
+function drawHorizontalLine(
+	grid: GridCell[][],
+	y: number,
+	fromX: number,
+	toX: number,
+	color: string,
+	addRightAtStart: boolean = true
+): void {
+	if (y < 0 || y >= grid.length || fromX >= toX) return;
+
+	for (let x = fromX; x < toX; x++) {
+		const cell = grid[y]![x]!;
+		// Add left connection if not at start
+		if (x > fromX) {
+			cell.char = addConnection(cell.char, 'left');
+		}
+		// Add right connection to continue the line
+		if (x > fromX || addRightAtStart) {
+			cell.char = addConnection(cell.char, 'right');
+		}
+		if (!cell.color) cell.color = color;
+	}
+	// Connect to the merge point
+	grid[y]![toX]!.char = addConnection(grid[y]![toX]!.char, 'left');
+}
+
+function drawVerticalConnector(
+	grid: GridCell[][],
+	x: number,
+	topY: number,
+	bottomY: number,
+	color: string
+): void {
+	const height = grid.length;
+
+	for (let y = Math.max(0, topY); y <= Math.min(height - 1, bottomY); y++) {
+		const cell = grid[y]![x]!;
+		if (y > topY) cell.char = addConnection(cell.char, 'up');
+		if (y < bottomY) cell.char = addConnection(cell.char, 'down');
+		cell.color = color;
+	}
+}
 
 function renderDendrogramGrid(
 	numLeaves: number,
@@ -56,7 +141,8 @@ function renderDendrogramGrid(
 	merges: MergeEvent[],
 	maxDist: number,
 	threshold: number,
-	width: number
+	width: number,
+	leafOrder: number[]
 ): GridCell[][] {
 	const height = displayRows;
 	const grid: GridCell[][] = Array.from({length: height}, () =>
@@ -65,77 +151,87 @@ function renderDendrogramGrid(
 
 	if (numLeaves === 0 || merges.length === 0) return grid;
 
-	// Track current cluster positions (y position for each original leaf)
-	// Use full numLeaves for union-find, but only display first displayRows
-	const clusterY: number[] = Array.from({length: numLeaves}, (_, i) => i);
-	const clusterMembers: number[][] = Array.from({length: numLeaves}, (_, i) => [i]);
-	const parent: number[] = Array.from({length: numLeaves}, (_, i) => i);
+	// Create mapping from original leaf index to row position
+	const leafToRow: Map<number, number> = new Map();
+	for (let row = 0; row < leafOrder.length; row++) {
+		leafToRow.set(leafOrder[row]!, row);
+	}
 
+	const clusters: Map<number, ClusterInfo> = new Map();
+	for (let i = 0; i < numLeaves; i++) {
+		const row = leafToRow.get(i) ?? i;
+		clusters.set(i, {trunkY: row, minY: row, maxY: row, lastX: 0, members: [i], isLeaf: true});
+	}
+
+	const parent: number[] = Array.from({length: numLeaves}, (_, i) => i);
 	const find = (i: number): number => {
 		if (parent[i] !== i) parent[i] = find(parent[i]!);
 		return parent[i]!;
 	};
 
-	// Track first merge x for each leaf
-	const leafMergeX: number[] = new Array(numLeaves).fill(width - 1);
-
 	for (const merge of merges) {
 		const x = Math.min(width - 1, Math.round((merge.distance / maxDist) * (width - 1)));
 		const rootA = find(merge.left);
 		const rootB = find(merge.right);
+		const clusterA = clusters.get(rootA)!;
+		const clusterB = clusters.get(rootB)!;
 
-		// Record merge x for leaves
-		for (const leaf of clusterMembers[rootA]!) {
-			if (leafMergeX[leaf] === width - 1) leafMergeX[leaf] = x;
+		const color = merge.distance <= threshold ? 'green' : 'cyan';
+		const yA = clusterA.trunkY;
+		const yB = clusterB.trunkY;
+		const topY = Math.min(yA, yB);
+		const bottomY = Math.max(yA, yB);
+		const newTrunkY = Math.floor((topY + bottomY) / 2);
+
+		// Draw horizontal lines - always add right at start to create the connection
+		drawHorizontalLine(grid, yA, clusterA.lastX, x, color, true);
+		drawHorizontalLine(grid, yB, clusterB.lastX, x, color, true);
+		drawVerticalConnector(grid, x, topY, bottomY, color);
+
+		// Clean up corners - remove right from top and bottom (corners should be clean)
+		if (topY >= 0 && topY < height) {
+			grid[topY]![x]!.char = removeConnection(grid[topY]![x]!.char, 'right');
 		}
-		for (const leaf of clusterMembers[rootB]!) {
-			if (leafMergeX[leaf] === width - 1) leafMergeX[leaf] = x;
-		}
-
-		// Merge clusters
-		const membersA = clusterMembers[rootA]!;
-		const membersB = clusterMembers[rootB]!;
-		const yA = clusterY[rootA]!;
-		const yB = clusterY[rootB]!;
-
-		const minY = Math.min(yA, yB);
-		const maxY = Math.max(yA, yB);
-		const newY = (yA + yB) / 2;
-
-		// Draw vertical connector (only if within display range)
-		const isBeforeThreshold = merge.distance <= threshold;
-		const color = isBeforeThreshold ? 'green' : 'gray';
-
-		for (let y = Math.max(0, Math.floor(minY)); y <= Math.min(height - 1, Math.ceil(maxY)); y++) {
-			if (x >= 0 && x < width) {
-				grid[y]![x] = {char: '│', color};
-			}
+		if (bottomY >= 0 && bottomY < height) {
+			grid[bottomY]![x]!.char = removeConnection(grid[bottomY]![x]!.char, 'right');
 		}
 
-		// Update union-find
 		parent[rootA] = rootB;
-		clusterMembers[rootB] = [...membersA, ...membersB];
-		clusterY[rootB] = newY;
+		clusters.delete(rootA);
+		clusters.set(rootB, {
+			trunkY: newTrunkY,
+			minY: Math.min(clusterA.minY, clusterB.minY),
+			maxY: Math.max(clusterA.maxY, clusterB.maxY),
+			lastX: x,
+			members: [...clusterA.members, ...clusterB.members],
+			isLeaf: false
+		});
 	}
 
-	// Draw horizontal lines from leaves to their merge point (only for displayed leaves)
-	for (let leaf = 0; leaf < displayRows; leaf++) {
-		const endX = leafMergeX[leaf]!;
-		for (let x = 0; x < endX; x++) {
-			if (grid[leaf]![x]!.char === ' ') {
-				grid[leaf]![x] = {char: '─', color: 'cyan'};
+	// Draw final trunk extending from the last merge point
+	for (const [, cluster] of clusters) {
+		const y = cluster.trunkY;
+		if (y >= 0 && y < height && cluster.lastX < width - 1) {
+			// Add right exit at the merge point
+			grid[y]![cluster.lastX]!.char = addConnection(grid[y]![cluster.lastX]!.char, 'right');
+			// Draw one cell extension
+			const nextX = cluster.lastX + 1;
+			if (nextX < width) {
+				grid[y]![nextX]!.char = addConnection(grid[y]![nextX]!.char, 'left');
+				if (!grid[y]![nextX]!.color) grid[y]![nextX]!.color = 'cyan';
 			}
 		}
 	}
 
-	// Draw threshold line
+	// Draw threshold line as visual overlay
 	const thresholdX = Math.min(width - 1, Math.round((threshold / maxDist) * (width - 1)));
 	for (let y = 0; y < height; y++) {
 		const cell = grid[y]![thresholdX]!;
-		if (cell.char === ' ' || cell.char === '─') {
+		if (cell.char === ' ') {
 			grid[y]![thresholdX] = {char: '┆', color: 'red'};
-		} else if (cell.char === '│') {
-			grid[y]![thresholdX] = {char: '┼', color: 'red'};
+		} else {
+			// Overlay on existing character - keep structure but mark threshold
+			cell.color = 'red';
 		}
 	}
 
@@ -166,19 +262,18 @@ export default function Dendrogram({data, threshold, onThresholdChange, onConfir
 	const maxRows = 20;
 	const displayLeaves = Math.min(numLeaves, maxRows);
 
-	// Render tree grid (pass numLeaves for union-find, displayLeaves for grid height)
-	const grid = renderDendrogramGrid(numLeaves, displayLeaves, data.merges, maxDist, threshold, treeWidth);
+	const leafOrder = computeOptimalLeafOrder(data.merges, numLeaves);
+	const grid = renderDendrogramGrid(numLeaves, displayLeaves, data.merges, maxDist, threshold, treeWidth, leafOrder);
 
 	return (
 		<Box flexDirection="column" padding={1}>
 			<Text bold>Dendrogram - Adjust Threshold</Text>
 			<Box marginY={1} />
 
-			{/* Tree visualization */}
 			<Box flexDirection="column">
 				{grid.map((row, y) => (
 					<Box key={y}>
-						<Text>{truncateLabel(data.labels[y] || '', labelWidth)}</Text>
+						<Text>{truncateLabel(data.labels[leafOrder[y]!] || '', labelWidth)}</Text>
 						<Text> </Text>
 						{row.map((cell, x) => (
 							<Text key={x} color={cell.color}>{cell.char}</Text>
@@ -193,7 +288,6 @@ export default function Dendrogram({data, threshold, onThresholdChange, onConfir
 
 			<Box marginY={1} />
 
-			{/* Distance scale */}
 			<Box>
 				<Text>{' '.repeat(labelWidth + 1)}</Text>
 				<Text dimColor>0</Text>

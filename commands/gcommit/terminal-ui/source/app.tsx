@@ -66,26 +66,23 @@ function AppContent({ threshold, verbose, dev }: Props) {
         const fs = await import('fs/promises');
         await fs.rm('/tmp/gcommit', { recursive: true, force: true });
       }
-    } catch {
-      // Ignore cleanup errors
+    } catch (err) {
+      process.stderr.write(`Error during cleanup: ${err}\n`);
     }
   }, [git]);
 
-  // Global cleanup on process exit/interrupt
+  // Handle external termination signals (SIGTERM, SIGHUP)
   useEffect(() => {
-    const handleExit = () => { performCleanup(phase !== 'error'); };
-    const handleSignal = () => { performCleanup(phase !== 'error').then(() => exit()); };
-
-    process.on('exit', handleExit);
-    process.on('SIGINT', handleSignal);
-    process.on('SIGTERM', handleSignal);
-
-    return () => {
-      process.off('exit', handleExit);
-      process.off('SIGINT', handleSignal);
-      process.off('SIGTERM', handleSignal);
+    const handleSignal = () => {
+      performCleanup().then(() => exit());
     };
-  }, [performCleanup, phase]);
+    process.on('SIGTERM', handleSignal);
+    process.on('SIGHUP', handleSignal);
+    return () => {
+      process.off('SIGTERM', handleSignal);
+      process.off('SIGHUP', handleSignal);
+    };
+  }, [performCleanup, exit]);
 
   // Phase functions
   const runInit = useCallback(async () => {
@@ -109,7 +106,7 @@ function AppContent({ threshold, verbose, dev }: Props) {
   // Phase 1: Run merge mode to get dendrogram
   const runProcessing = useCallback(async () => {
     try {
-      setStatusMessage('Analyzing changes with AI...');
+      setStatusMessage('Analyzing changes with AI ...');
 
       const { execa } = await import('execa');
       const fs = await import('fs/promises');
@@ -295,6 +292,12 @@ function AppContent({ threshold, verbose, dev }: Props) {
 
   // Keyboard input handler
   useInput((input, key) => {
+    // Global Ctrl+C handler
+    if (key.ctrl && input === 'c') {
+      setPhase('cancelled');
+      return;
+    }
+
     // Dev mode confirmation
     if (phase === 'dev-confirm' && pendingPhase) {
       if (input === 'y' || key.return) {

@@ -410,7 +410,7 @@ int run_threshold_mode(float threshold, const string& json_path, int verbose) {
 
   output["visualization"] = viz_output;
 
-  cout << output.dump() << endl;
+cout << output.dump() << endl;
 
   if (verbose >= 1) cerr << "Output complete." << endl;
   return 0;
