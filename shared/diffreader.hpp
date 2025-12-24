@@ -20,13 +20,13 @@ struct DiffLine {
     int line_num;
 };
 struct DiffChunk {
-    string filepath;      // New path (or same as old if not renamed)
-    string old_filepath;  // Old path (for renames, same as filepath if not renamed)
+    string filepath;
+    string old_filepath;
     vector<DiffLine> lines;
     int start = 1;
-    bool is_deleted = false;  // File is being deleted (whole file removal)
-    bool is_new = false;      // File is being created (new file)
-    bool is_rename = false;   // Pure rename (no content changes)
+    bool is_deleted = false;
+    bool is_new = false;
+    bool is_rename = false;
 };
 
 
@@ -60,8 +60,8 @@ public:
 string combineContent(DiffChunk chunk);
 string createPatch(DiffChunk chunk, bool include_file_header = true);
 vector<string> createPatches(vector<DiffChunk> chunks);
+vector<vector<string>> createPatches(const vector<DiffChunk>& chunks, const vector<vector<int>>& clusters);
 
-// JSON serialization
 #include <nlohmann/json.hpp>
 nlohmann::json chunk_to_json(const DiffChunk& chunk);
 DiffChunk chunk_from_json(const nlohmann::json& j);

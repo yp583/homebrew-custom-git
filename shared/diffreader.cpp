@@ -2,6 +2,7 @@
 #include <vector>
 #include <fstream>
 #include <map>
+#include <algorithm>
 
 DiffReader::DiffReader(istream& in, bool verbose)
     : in(in),
@@ -231,7 +232,7 @@ vector<string> createPatches(vector<DiffChunk> chunks) {
 
     unordered_map<string, size_t> deleted_file_last_idx;
     unordered_map<string, size_t> new_file_first_idx;
-    
+
     for (size_t i = 0; i < chunks.size(); i++) {
         if (chunks[i].is_deleted) {
             deleted_file_last_idx[chunks[i].filepath] = i;
@@ -283,7 +284,7 @@ vector<string> createPatches(vector<DiffChunk> chunks) {
             else if (line.mode == DELETION) { old_count++; }
             else if (line.mode == INSERTION) { new_count++; }
         }
-        
+
         int delta = new_count - old_count;
         if (delta != 0) {
             auto update_it = cumulative_deltas.lower_bound(original_start);
@@ -302,6 +303,92 @@ vector<string> createPatches(vector<DiffChunk> chunks) {
     }
 
     return patches;
+}
+
+vector<vector<string>> createPatches(const vector<DiffChunk>& chunks, const vector<vector<int>>& clusters) {
+    vector<vector<string>> all_patches(clusters.size());
+
+    unordered_map<string, pair<int, int>> new_file_owner;      // first chunk (min idx) -> {cluster_idx, chunk_idx}
+    unordered_map<string, pair<int, int>> deleted_file_owner;  // last chunk (max idx)
+    unordered_map<string, int> new_file_next_position;
+    unordered_map<int, int> chunk_new_start;  // chunk_idx -> assigned start position
+
+    // First pass: determine ownership (prefer lowest cluster index, then lowest chunk index)
+    for (size_t cluster_idx = 0; cluster_idx < clusters.size(); cluster_idx++) {
+        for (int chunk_idx : clusters[cluster_idx]) {
+            const DiffChunk& chunk = chunks[chunk_idx];
+
+            if (chunk.is_new) {
+                auto it = new_file_owner.find(chunk.filepath);
+                // Prefer lower cluster index; if same cluster, prefer lower chunk index
+                if (it == new_file_owner.end() ||
+                    cluster_idx < static_cast<size_t>(it->second.first) ||
+                    (cluster_idx == static_cast<size_t>(it->second.first) && chunk_idx < it->second.second)) {
+                    new_file_owner[chunk.filepath] = {static_cast<int>(cluster_idx), chunk_idx};
+                }
+                if (new_file_next_position.find(chunk.filepath) == new_file_next_position.end()) {
+                    new_file_next_position[chunk.filepath] = 1;
+                }
+            }
+
+            if (chunk.is_deleted) {
+                auto it = deleted_file_owner.find(chunk.filepath);
+                // For deleted: prefer highest cluster index (applied last), then highest chunk index
+                if (it == deleted_file_owner.end() ||
+                    cluster_idx > static_cast<size_t>(it->second.first) ||
+                    (cluster_idx == static_cast<size_t>(it->second.first) && chunk_idx > it->second.second)) {
+                    deleted_file_owner[chunk.filepath] = {static_cast<int>(cluster_idx), chunk_idx};
+                }
+            }
+        }
+    }
+
+    // Assign positions in original chunk index order (which is line order)
+    for (size_t i = 0; i < chunks.size(); i++) {
+        const DiffChunk& chunk = chunks[i];
+        if (chunk.is_new) {
+            int new_count = 0;
+            for (const DiffLine& line : chunk.lines) {
+                if (line.mode == INSERTION) new_count++;
+            }
+            chunk_new_start[i] = new_file_next_position[chunk.filepath];
+            new_file_next_position[chunk.filepath] += new_count;
+        }
+    }
+
+    // Process each cluster
+    for (size_t cluster_idx = 0; cluster_idx < clusters.size(); cluster_idx++) {
+        vector<DiffChunk> cluster_chunks;
+        for (int idx : clusters[cluster_idx]) {
+            cluster_chunks.push_back(chunks[idx]);
+        }
+
+        // Adjust is_new/is_deleted flags and apply pre-computed positions
+        for (size_t i = 0; i < cluster_chunks.size(); i++) {
+            auto& chunk = cluster_chunks[i];
+            int orig_idx = clusters[cluster_idx][i];
+
+            if (chunk.is_new) {
+                auto it = new_file_owner.find(chunk.filepath);
+                // Only the specific owning chunk keeps is_new for --- /dev/null header
+                if (it == new_file_owner.end() || it->second.second != orig_idx) {
+                    chunk.is_new = false;
+                }
+                chunk.start = chunk_new_start[orig_idx];
+            }
+            if (chunk.is_deleted) {
+                auto it = deleted_file_owner.find(chunk.filepath);
+                if (it == deleted_file_owner.end() || it->second.second != orig_idx) {
+                    chunk.is_deleted = false;
+                }
+            }
+        }
+
+        // Use existing createPatches for this cluster
+        all_patches[cluster_idx] = createPatches(cluster_chunks);
+    }
+
+    return all_patches;
 }
 
 nlohmann::json chunk_to_json(const DiffChunk& chunk) {

@@ -276,38 +276,29 @@ int run_threshold_mode(float threshold, const string& json_path, int verbose) {
   vector<vector<int>> clusters = get_clusters_at_threshold(merges, threshold);
   if (verbose >= 1) cerr << "Found " << clusters.size() << " clusters" << endl;
 
-  // Group chunks by cluster and create patches
+  // Create patches for all clusters at once (handles new/deleted file ordering globally)
   filesystem::remove_all("/tmp/gcommit");
   filesystem::create_directories("/tmp/gcommit");
 
+  vector<vector<string>> all_patches = createPatches(all_chunks, clusters);
   vector<vector<string>> clusters_patch_paths;
 
   for (size_t i = 0; i < clusters.size(); i++) {
-    const vector<int>& cluster = clusters[i];
-    if (verbose >= 1) cerr << "Cluster " << i << ": " << cluster.size() << " chunks" << endl;
-
-    // Gather chunks for this cluster
-    vector<DiffChunk> cluster_chunks;
-    for (int idx : cluster) {
-      cluster_chunks.push_back(all_chunks[idx]);
-    }
-
-    // Create patches for this cluster
-    vector<string> patches = createPatches(cluster_chunks);
+    if (verbose >= 1) cerr << "Cluster " << i << ": " << clusters[i].size() << " chunks" << endl;
 
     string cluster_dir = "/tmp/gcommit/cluster_" + to_string(i);
     filesystem::create_directories(cluster_dir);
 
     vector<string> patch_paths;
     int patch_num = 0;
-    for (size_t j = 0; j < patches.size(); j++) {
-      if (patches[j].empty()) {
+    for (size_t j = 0; j < all_patches[i].size(); j++) {
+      if (all_patches[i][j].empty()) {
         if (verbose >= 1) cerr << "Skipping empty patch" << endl;
         continue;
       }
       string patch_path = cluster_dir + "/patch_" + to_string(patch_num++) + ".patch";
       ofstream patch_file(patch_path);
-      patch_file << patches[j];
+      patch_file << all_patches[i][j];
       patch_file.close();
       patch_paths.push_back(patch_path);
       if (verbose >= 1) cerr << "Wrote " << patch_path << endl;
