@@ -193,6 +193,37 @@ $ git gcommit
 
 ---
 
+### `git qcommit` - Quick Templated Commits
+
+Commits staged changes using predefined messages stored in git config. Useful for repetitive commit messages like "merged", "update formula", etc.
+
+**Configuration:**
+
+Messages are stored in git config under `qcommit.m<n>` keys:
+```bash
+git config --global qcommit.m1 "merged"
+git config --global qcommit.m2 "update formula"
+git config --global qcommit.m3 "wip"
+```
+
+**Usage:**
+```bash
+git add .
+git qcommit 1    # Commits with message "merged"
+git qcommit 2    # Commits with message "update formula"
+git qcommit -h   # Show help
+```
+
+**Example:**
+```bash
+$ git config --global qcommit.m1 "merged"
+$ git add .
+$ git qcommit 1
+Committed with message: merged
+```
+
+---
+
 ## Architecture
 
 ```
