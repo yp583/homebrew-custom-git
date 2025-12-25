@@ -36,6 +36,7 @@ export function GitProvider({ children, dev = false }: GitProviderProps) {
 
   const stagingBranchRef = useRef<string | null>(null);
   const originalBranchRef = useRef<string>('');
+  const hasNotStagedStashRef = useRef<boolean>(false);
 
   useEffect(() => {
     state.git.branch().then(b => {
@@ -51,28 +52,26 @@ export function GitProvider({ children, dev = false }: GitProviderProps) {
 
   const createStagingBranch = useCallback(async (): Promise<string> => {
     const status = await state.git.status();
-    const hasChanges = status.modified.length > 0 ||
-                       status.not_added.length > 0 ||
-                       status.deleted.length > 0 ||
-                       status.staged.length > 0 ||
-                       status.renamed.length > 0 ||
-                       status.created.length > 0;
+    // Detect any non-staged changes: unstaged modifications + untracked files
+    const hasNotStagedChanges = status.modified.length > 0 ||
+                                status.not_added.length > 0 ||
+                                status.deleted.length > 0;
 
-    if (hasChanges) {
-      await state.git.stash(['push', '-u', '-m', 'gcommit-temp']);
+    // Stash ONLY non-staged changes (keep staged intact with -k, include untracked with -u)
+    if (hasNotStagedChanges) {
+      await state.git.stash(['push', '-u', '-k', '-m', 'gcommit-notstaged']);
+      hasNotStagedStashRef.current = true;
     }
 
+    // Capture staged diff before switching branches
+    const diff = await state.git.diff(['--cached']);
+
+    // Create staging branch and reset to clean state
     const branchName = `gcommit/staging-${Date.now()}`;
     await state.git.checkoutLocalBranch(branchName);
-
-    if (hasChanges) {
-      await state.git.stash(['apply', '--index']);
-    }
-
-    const diff = await state.git.diff(['--cached']);
-    setState(s => ({ ...s, stagedDiff: diff, stagingBranch: branchName }));
-
     await state.git.reset(['--hard']);
+
+    setState(s => ({ ...s, stagedDiff: diff, stagingBranch: branchName }));
     return branchName;
   }, [state.git]);
 
@@ -89,6 +88,13 @@ export function GitProvider({ children, dev = false }: GitProviderProps) {
       await state.git.checkout(state.originalBranch);
       await state.git.merge([state.stagingBranch]);
       await state.git.deleteLocalBranch(state.stagingBranch, true);
+
+      // Restore non-staged changes (unstaged + untracked) if we stashed them
+      if (hasNotStagedStashRef.current) {
+        await state.git.stash(['apply']);
+        hasNotStagedStashRef.current = false;
+      }
+
       setState(s => ({ ...s, stagingBranch: null }));
     }
   }, [state.git, state.stagingBranch, state.originalBranch]);
@@ -118,20 +124,21 @@ export function GitProvider({ children, dev = false }: GitProviderProps) {
 
     if (stagingBranch) {
       try {
-        await state.git.add('-A');
-        await state.git.commit("commit to cleanup");
-      } catch {
-        // No changes to commit before checkout
-      }
-      try {
         await state.git.checkout(originalBranch);
         await state.git.deleteLocalBranch(stagingBranch, true);
-        await state.git.stash(['apply', "--index"]);
       } catch (err) {
         console.error("Failed during git cleanup:", err);
       }
-    } else {
-      console.error("No staging branch name found");
+    }
+
+    // Restore non-staged changes (unstaged + untracked) if we stashed them
+    if (hasNotStagedStashRef.current) {
+      try {
+        await state.git.stash(['apply']);
+        hasNotStagedStashRef.current = false;
+      } catch (err) {
+        console.error("Failed to restore non-staged changes:", err);
+      }
     }
   }, [state.git]);
 
