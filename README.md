@@ -174,6 +174,8 @@ The command runs in two phases:
 - Go (tree-sitter-go)
 - Plain text files (line-based chunking)
 
+**Note:** For very large staged changes, the command may occasionally fail due to OpenAI API rate limits.
+
 **Example:**
 ```bash
 $ git add .
