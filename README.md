@@ -99,7 +99,6 @@ Analyzes staged changes semantically, clusters similar changes together, and cre
 ```bash
 git gcommit                 # Default threshold (0.5)
 git gcommit -v              # Verbose output (shows C++ binary stderr)
-git gcommit --dev           # Step through phases with confirmation prompts
 git gcommit -h              # Show help
 ```
 
@@ -107,7 +106,6 @@ git gcommit -h              # Show help
 | Flag | Description |
 |------|-------------|
 | `-v`, `--verbose` | Show verbose output from the C++ clustering engine |
-| `--dev` | Developer mode: pause between phases for debugging |
 | `-h`, `--help` | Show help message |
 
 **How it works:**
