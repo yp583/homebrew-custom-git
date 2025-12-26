@@ -43,6 +43,9 @@ class CustomGit < Formula
       bin.install "build/git_mcommit.o"
       bin.install "git-mcommit"
     end
+
+    # Install qcommit (bash script only)
+    bin.install "commands/qcommit/git-qcommit"
   end
 
   def caveats
@@ -56,13 +59,20 @@ class CustomGit < Formula
           git config --global custom.openaiApiKey "sk-..."
 
       Available commands:
-        git gcommit [threshold]  - Cluster staged changes and create semantic commits
-        git mcommit [-i]         - Simple AI-generated commit message
+        git gcommit [-v]           Smart commit clustering with interactive UI
+        git mcommit [-i]          AI-generated commit message (-i to edit in vim)
+        git qcommit <n>           Quick commit with predefined message
+
+      Setup qcommit:
+        git config --global qcommit.m1 "merged"
+        git config --global qcommit.m2 "wip"
+        Then: git qcommit 1
     EOS
   end
 
   test do
     system bin/"git_gcommit.o", "--help"
     system bin/"git_mcommit.o", "--help"
+    system bin/"git-qcommit", "--help"
   end
 end
