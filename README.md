@@ -11,6 +11,8 @@ brew tap yp583/custom-git
 brew install custom-git
 ```
 
+> **_NOTE:_** Because of tree-sitter installation this takes a while. To see progress use -v flag on brew install
+
 ### Manual Installation
 
 1. **Clone the repository:**
