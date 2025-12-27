@@ -11,7 +11,12 @@ type Props = {
 	onCancel: () => void;
 };
 
-function countClustersAtThreshold(merges: MergeEvent[], numLeaves: number, threshold: number): number {
+function countClustersAtThreshold(
+	merges: MergeEvent[],
+	numLeaves: number,
+	threshold: number,
+	chunkHasChanges?: boolean[]
+): number {
 	const parent = Array.from({length: numLeaves}, (_, i) => i);
 
 	const find = (i: number): number => {
@@ -32,6 +37,17 @@ function countClustersAtThreshold(merges: MergeEvent[], numLeaves: number, thres
 	for (const merge of merges) {
 		if (merge.distance > threshold) break;
 		unite(merge.left, merge.right);
+	}
+
+	// Only count clusters that contain at least one chunk with actual changes
+	if (chunkHasChanges) {
+		const validRoots = new Set<number>();
+		for (let i = 0; i < numLeaves; i++) {
+			if (chunkHasChanges[i]) {
+				validRoots.add(find(i));
+			}
+		}
+		return validRoots.size;
 	}
 
 	const roots = new Set<number>();
@@ -240,7 +256,7 @@ function renderDendrogramGrid(
 
 export default function Dendrogram({data, threshold, onThresholdChange, onConfirm, onCancel}: Props) {
 	const numLeaves = data.labels.length;
-	const clusterCount = countClustersAtThreshold(data.merges, numLeaves, threshold);
+	const clusterCount = countClustersAtThreshold(data.merges, numLeaves, threshold, data.chunk_has_changes);
 
 	const maxDist = data.max_distance || 1;
 	const step = maxDist / 20;

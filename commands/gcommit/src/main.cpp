@@ -201,6 +201,14 @@ int run_merge_mode(int verbose) {
   }
   dendrogram["merges"] = merges_json;
   dendrogram["max_distance"] = max_distance;
+
+  // Add has_changes per chunk for accurate cluster counting in UI
+  json chunk_has_changes_json = json::array();
+  for (const auto& chunk : all_chunks) {
+    chunk_has_changes_json.push_back(chunk_has_changes(chunk));
+  }
+  dendrogram["chunk_has_changes"] = chunk_has_changes_json;
+
   output["dendrogram"] = dendrogram;
 
   // Chunks with UMAP coordinates
@@ -222,6 +230,9 @@ int run_merge_mode(int verbose) {
     string preview = combineContent(all_chunks[i]);
     if (preview.size() > 100) preview = preview.substr(0, 100) + "...";
     chunk_j["preview"] = preview;
+
+    // Add has_changes flag for accurate cluster counting
+    chunk_j["has_changes"] = chunk_has_changes(all_chunks[i]);
 
     chunks_json.push_back(chunk_j);
   }

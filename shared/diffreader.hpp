@@ -61,6 +61,7 @@ string combineContent(DiffChunk chunk);
 string createPatch(DiffChunk chunk, bool include_file_header = true);
 vector<string> createPatches(vector<DiffChunk> chunks);
 vector<vector<string>> createPatches(const vector<DiffChunk>& chunks, const vector<vector<int>>& clusters);
+bool chunk_has_changes(const DiffChunk& chunk);
 
 #include <nlohmann/json.hpp>
 nlohmann::json chunk_to_json(const DiffChunk& chunk);

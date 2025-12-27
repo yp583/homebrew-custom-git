@@ -158,6 +158,13 @@ int getNumLines(string filepath) {
 
 
 
+bool chunk_has_changes(const DiffChunk& chunk) {
+    for (const DiffLine& line : chunk.lines) {
+        if (line.mode == INSERTION || line.mode == DELETION) return true;
+    }
+    return false;
+}
+
 string createPatch(DiffChunk chunk, bool include_file_header) {
     string patch;
     bool is_rename = (chunk.old_filepath != chunk.filepath) && !chunk.is_new && !chunk.is_deleted;

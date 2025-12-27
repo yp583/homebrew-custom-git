@@ -34,9 +34,10 @@ export type MergeEvent = {
 };
 
 export type DendrogramData = {
-  labels: string[];      // filepath for each leaf (chunk)
-  merges: MergeEvent[];  // merge events to draw the tree
-  max_distance: number;  // for scaling x-axis
+  labels: string[];           // filepath for each leaf (chunk)
+  merges: MergeEvent[];       // merge events to draw the tree
+  max_distance: number;       // for scaling x-axis
+  chunk_has_changes: boolean[]; // whether each chunk has actual insertions/deletions
 };
 
 export type MergePhaseResult = {
