@@ -2,7 +2,7 @@
 
 A collection of custom git commands that extend Git's functionality with AI-powered commit workflows.
 
-<video src="demos/gcommit-demo.mp4" controls width="50%"></video>
+![gcommit demo](demos/gcommit-demo.gif)
 
 ## Installation
 
@@ -58,7 +58,7 @@ The environment variable takes precedence if both are set.
 
 ### `git mcommit` - AI Commit Message Generator
 
-<video src="demos/mcommit-demo.mp4" controls width="50%"></video>
+![mcommit demo](demos/mcommit-demo.gif)
 
 Generates a single commit message for all staged changes using OpenAI's gpt-4o-mini model.
 
@@ -99,7 +99,7 @@ Smart commit complete!
 
 ### `git gcommit` - Smart Commit Clustering
 
-<video src="demos/gcommit-demo.mp4" controls width="50%"></video>
+![gcommit demo](demos/gcommit-demo.gif)
 
 Analyzes staged changes semantically, clusters similar changes together, and creates separate commits for each cluster. Features an interactive terminal UI built with Ink (React for CLI) to review and adjust before applying.
 
