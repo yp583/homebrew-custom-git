@@ -168,8 +168,8 @@ function AppContent({ threshold, verbose, dev }: Props) {
         setStderr(prev => prev + '\n' + result.stderr);
       }
 
-      const data: { commits: ProcessingResult['commits'] } = JSON.parse(result.stdout);
-      setProcessingResult({ commits: data.commits, visualization: { points: [], clusters: [] } });
+      const data: ProcessingResult = JSON.parse(result.stdout);
+      setProcessingResult(data);
 
       goToPhase('applying');
     } catch (err: any) {
@@ -478,7 +478,8 @@ function AppContent({ threshold, verbose, dev }: Props) {
     return (
       <Box flexDirection="column">
         <Text color="red">Error: {error}</Text>
-        <Text dimColor>Cleaned up staging branch and restored stash.</Text>
+        <Text dimColor>Attempted cleanup. If changes were lost, run: git gcommit --recover</Text>
+        <Text dimColor>Or check: git stash list (look for gcommit-staged / gcommit-unstaged)</Text>
       </Box>
     );
   }

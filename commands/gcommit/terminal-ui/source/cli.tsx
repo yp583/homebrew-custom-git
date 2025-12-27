@@ -12,12 +12,14 @@ const cli = meow(`
     -d, --threshold  Clustering distance threshold (default: 0.5)
     -v, --verbose    Show verbose output from C++ binary
     --dev            Step through phases with confirmation prompts
+    --recover        Recover changes from a failed gcommit run
     -h, --help       Show this help message
 
   Examples
     $ git gcommit
     $ git gcommit -d 0.3
     $ git gcommit --threshold 0.7 --verbose
+    $ git gcommit --recover
 `, {
   importMeta: import.meta,
   flags: {
@@ -35,6 +37,10 @@ const cli = meow(`
       type: 'boolean',
       default: false,
     },
+    recover: {
+      type: 'boolean',
+      default: false,
+    },
     help: {
       type: 'boolean',
       shortFlag: 'h',
@@ -46,6 +52,70 @@ const cli = meow(`
 if (cli.flags.help) {
   cli.showHelp();
 }
+
+async function findStashByName(git: ReturnType<typeof simpleGit>, name: string): Promise<string | null> {
+  const result = await git.stash(['list']);
+  const lines = result.split('\n');
+  for (const line of lines) {
+    if (line.includes(name)) {
+      const match = line.match(/^(stash@\{\d+\})/);
+      if (match && match[1]) return match[1];
+    }
+  }
+  return null;
+}
+
+async function recover() {
+  const git = simpleGit();
+
+  const isRepo = await git.checkIsRepo();
+  if (!isRepo) {
+    console.error('Error: Not in a git repository');
+    process.exit(1);
+  }
+
+  let recovered = false;
+
+  // Try to recover staged changes
+  const stagedRef = await findStashByName(git, 'gcommit-staged');
+  if (stagedRef) {
+    try {
+      await git.stash(['apply', '--index', stagedRef]);
+      console.log('✓ Recovered staged changes');
+      recovered = true;
+    } catch (err: any) {
+      console.error(`Failed to recover staged changes: ${err.message}`);
+    }
+  }
+
+  // Try to recover unstaged changes
+  const unstagedRef = await findStashByName(git, 'gcommit-unstaged');
+  if (unstagedRef) {
+    try {
+      await git.stash(['apply', unstagedRef]);
+      console.log('✓ Recovered unstaged changes');
+      recovered = true;
+    } catch (err: any) {
+      console.error(`Failed to recover unstaged changes: ${err.message}`);
+    }
+  }
+
+  if (!recovered) {
+    console.log('No gcommit stashes found to recover.');
+  } else {
+    console.log('\nRecovery complete. Your changes have been restored.');
+  }
+
+  process.exit(0);
+}
+
+// Handle --recover flag (exits after recovery)
+if (cli.flags.recover) {
+  recover().catch(err => {
+    console.error('Recovery failed:', err.message);
+    process.exit(1);
+  });
+} else {
 
 async function main() {
   const git = simpleGit();
@@ -79,5 +149,8 @@ async function main() {
 
 main().catch(err => {
   console.error('Error:', err.message);
+  console.error('\nIf changes were lost, try: git gcommit --recover');
+  console.error('Or manually: git stash apply stash@{n} (check git stash list for gcommit-staged/gcommit-unstaged)');
   process.exit(1);
 });
+}

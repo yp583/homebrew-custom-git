@@ -36,7 +36,21 @@ export function GitProvider({ children, dev = false }: GitProviderProps) {
 
   const stagingBranchRef = useRef<string | null>(null);
   const originalBranchRef = useRef<string>('');
-  const hasNotStagedStashRef = useRef<boolean>(false);
+  const hasUnstagedStashRef = useRef<boolean>(false);
+  const hasStagedStashRef = useRef<boolean>(false);
+  const stagedDiffRef = useRef<string>('');
+
+  const findStashByName = async (name: string): Promise<string | null> => {
+    const result = await state.git.stash(['list']);
+    const lines = result.split('\n');
+    for (const line of lines) {
+      if (line.includes(name)) {
+        const match = line.match(/^(stash@\{\d+\})/);
+        if (match) return match[1];
+      }
+    }
+    return null;
+  };
 
   useEffect(() => {
     state.git.branch().then(b => {
@@ -51,25 +65,31 @@ export function GitProvider({ children, dev = false }: GitProviderProps) {
   }, [state.stagingBranch, state.originalBranch]);
 
   const createStagingBranch = useCallback(async (): Promise<string> => {
+    // Capture staged diff before anything else
+    const diff = await state.git.diff(['--cached']);
+    stagedDiffRef.current = diff;
+
     const status = await state.git.status();
-    // Detect any non-staged changes: unstaged modifications + untracked files
-    const hasNotStagedChanges = status.modified.length > 0 ||
+
+    // First, stash unstaged + untracked (keep staged in place with -k)
+    const hasUnstagedChanges = status.modified.length > 0 ||
                                 status.not_added.length > 0 ||
                                 status.deleted.length > 0;
-
-    // Stash ONLY non-staged changes (keep staged intact with -k, include untracked with -u)
-    if (hasNotStagedChanges) {
-      await state.git.stash(['push', '-u', '-k', '-m', 'gcommit-notstaged']);
-      hasNotStagedStashRef.current = true;
+    if (hasUnstagedChanges) {
+      await state.git.stash(['push', '-u', '-k', '-m', 'gcommit-unstaged']);
+      hasUnstagedStashRef.current = true;
     }
 
-    // Capture staged diff before switching branches
-    const diff = await state.git.diff(['--cached']);
+    // Now stash the staged changes separately (so we can restore on cancel)
+    const hasStagedChanges = status.staged.length > 0;
+    if (hasStagedChanges) {
+      await state.git.stash(['push', '-m', 'gcommit-staged']);
+      hasStagedStashRef.current = true;
+    }
 
-    // Create staging branch and reset to clean state
+    // Create staging branch from clean state
     const branchName = `gcommit/staging-${Date.now()}`;
     await state.git.checkoutLocalBranch(branchName);
-    await state.git.reset(['--hard']);
 
     setState(s => ({ ...s, stagedDiff: diff, stagingBranch: branchName }));
     return branchName;
@@ -89,10 +109,22 @@ export function GitProvider({ children, dev = false }: GitProviderProps) {
       await state.git.merge([state.stagingBranch]);
       await state.git.deleteLocalBranch(state.stagingBranch, true);
 
-      // Restore non-staged changes (unstaged + untracked) if we stashed them
-      if (hasNotStagedStashRef.current) {
-        await state.git.stash(['apply']);
-        hasNotStagedStashRef.current = false;
+      // Staged stash - apply it (changes already committed, may conflict/no-op)
+      if (hasStagedStashRef.current) {
+        try {
+          const stagedRef = await findStashByName('gcommit-staged');
+          if (stagedRef) await state.git.stash(['apply', '--index', stagedRef]);
+        } catch {
+          // Expected - staged changes already committed
+        }
+        hasStagedStashRef.current = false;
+      }
+
+      // Restore unstaged changes
+      if (hasUnstagedStashRef.current) {
+        const unstagedRef = await findStashByName('gcommit-unstaged');
+        if (unstagedRef) await state.git.stash(['apply', unstagedRef]);
+        hasUnstagedStashRef.current = false;
       }
 
       setState(s => ({ ...s, stagingBranch: null }));
@@ -131,13 +163,25 @@ export function GitProvider({ children, dev = false }: GitProviderProps) {
       }
     }
 
-    // Restore non-staged changes (unstaged + untracked) if we stashed them
-    if (hasNotStagedStashRef.current) {
+    // Restore staged changes with --index to keep them staged
+    if (hasStagedStashRef.current) {
       try {
-        await state.git.stash(['apply']);
-        hasNotStagedStashRef.current = false;
+        const stagedRef = await findStashByName('gcommit-staged');
+        if (stagedRef) await state.git.stash(['apply', '--index', stagedRef]);
+        hasStagedStashRef.current = false;
       } catch (err) {
-        console.error("Failed to restore non-staged changes:", err);
+        console.error("Failed to restore staged changes:", err);
+      }
+    }
+
+    // Restore unstaged changes
+    if (hasUnstagedStashRef.current) {
+      try {
+        const unstagedRef = await findStashByName('gcommit-unstaged');
+        if (unstagedRef) await state.git.stash(['apply', unstagedRef]);
+        hasUnstagedStashRef.current = false;
+      } catch (err) {
+        console.error("Failed to restore unstaged changes:", err);
       }
     }
   }, [state.git]);
