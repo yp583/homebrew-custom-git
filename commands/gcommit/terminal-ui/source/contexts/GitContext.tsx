@@ -46,7 +46,7 @@ export function GitProvider({ children, dev = false }: GitProviderProps) {
     for (const line of lines) {
       if (line.includes(name)) {
         const match = line.match(/^(stash@\{\d+\})/);
-        if (match) return match[1];
+        if (match && match[1]) return match[1];
       }
     }
     return null;
